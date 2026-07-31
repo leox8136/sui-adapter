@@ -11,8 +11,6 @@ import (
 	rpcv2 "sui-adapter/internal/suiv2"
 )
 
-const deletedObjectDigest = "7gyGAp71YXQRoxmFBaHxofQXAipvgHyBKPyxmdSJxyvz"
-
 func legacyCheckpoint(checkpoint *rpcv2.Checkpoint) map[string]any {
 	summary := checkpoint.GetSummary()
 	transactions := make([]string, 0)
@@ -99,7 +97,11 @@ func timestampMillis(timestamp interface {
 	return strconv.FormatInt(millis, 10)
 }
 
-func legacyTransaction(transaction *rpcv2.ExecutedTransaction, options transactionOptions) map[string]any {
+func legacyTransaction(
+	transaction *rpcv2.ExecutedTransaction,
+	options transactionOptions,
+	publishedModules map[string][]string,
+) (map[string]any, error) {
 	result := map[string]any{"digest": transaction.GetDigest()}
 	if transaction.Checkpoint != nil {
 		result["checkpoint"] = strconv.FormatUint(transaction.GetCheckpoint(), 10)
@@ -126,20 +128,27 @@ func legacyTransaction(transaction *rpcv2.ExecutedTransaction, options transacti
 		result["events"] = legacyEvents(transaction)
 	}
 	if options.ShowObjectChanges {
-		result["objectChanges"] = legacyObjectChanges(transaction)
+		result["objectChanges"] = legacyObjectChanges(transaction, publishedModules)
 	}
 	if options.ShowBalanceChanges {
-		result["balanceChanges"] = legacyBalanceChanges(transaction.GetBalanceChanges())
+		balanceChanges, err := legacyBalanceChanges(transaction)
+		if err != nil {
+			return nil, err
+		}
+		result["balanceChanges"] = balanceChanges
 	}
-	return result
+	return result, nil
 }
 
-func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction) map[string]any {
+func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction) (map[string]any, error) {
 	options := transactionOptions{
 		ShowInput: true, ShowEffects: true, ShowEvents: true,
 		ShowObjectChanges: true, ShowBalanceChanges: true,
 	}
-	result := legacyTransaction(transaction, options)
+	result, err := legacyTransaction(transaction, options, nil)
+	if err != nil {
+		return nil, err
+	}
 	delete(result, "digest")
 	delete(result, "checkpoint")
 	delete(result, "timestampMs")
@@ -148,7 +157,7 @@ func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction) map[string]
 	if status := transaction.GetEffects().GetStatus(); status != nil && !status.GetSuccess() {
 		result["executionError"] = status.GetError().GetDescription()
 	}
-	return result
+	return result, nil
 }
 
 func legacySignatures(signatures []*rpcv2.UserSignature) []string {
@@ -501,7 +510,10 @@ func legacyEffects(effects *rpcv2.TransactionEffects, transaction *rpcv2.Transac
 
 	created := make([]any, 0)
 	mutated := make([]any, 0)
+	unwrapped := make([]any, 0)
 	deleted := make([]any, 0)
+	unwrappedThenDeleted := make([]any, 0)
+	wrapped := make([]any, 0)
 	modified := make([]any, 0)
 	shared := make([]any, 0)
 	for _, object := range effects.GetChangedObjects() {
@@ -520,14 +532,26 @@ func legacyEffects(effects *rpcv2.TransactionEffects, transaction *rpcv2.Transac
 		case rpcv2.ChangedObject_CREATED:
 			created = append(created, legacyOwnedObject(object))
 		case rpcv2.ChangedObject_DELETED:
-			deleted = append(deleted, map[string]any{
-				"objectId": object.GetObjectId(),
-				"version":  effects.GetLamportVersion(),
-				"digest":   deletedObjectDigest,
-			})
+			deletedRef := legacyObjectReference(
+				object.GetObjectId(), object.GetInputVersion(), object.GetInputDigest(),
+			)
+			if object.GetInputState() == rpcv2.ChangedObject_INPUT_OBJECT_STATE_DOES_NOT_EXIST {
+				unwrappedThenDeleted = append(unwrappedThenDeleted, deletedRef)
+			} else {
+				deleted = append(deleted, deletedRef)
+			}
 		default:
-			if object.GetOutputState() == rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_OBJECT_WRITE {
-				mutated = append(mutated, legacyOwnedObject(object))
+			switch object.GetOutputState() {
+			case rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_OBJECT_WRITE:
+				if object.GetInputState() == rpcv2.ChangedObject_INPUT_OBJECT_STATE_DOES_NOT_EXIST {
+					unwrapped = append(unwrapped, legacyOwnedObject(object))
+				} else {
+					mutated = append(mutated, legacyOwnedObject(object))
+				}
+			case rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_DOES_NOT_EXIST:
+				wrapped = append(wrapped, legacyObjectReference(
+					object.GetObjectId(), object.GetInputVersion(), object.GetInputDigest(),
+				))
 			}
 		}
 	}
@@ -555,8 +579,17 @@ func legacyEffects(effects *rpcv2.TransactionEffects, transaction *rpcv2.Transac
 	if len(mutated) > 0 {
 		result["mutated"] = mutated
 	}
+	if len(unwrapped) > 0 {
+		result["unwrapped"] = unwrapped
+	}
 	if len(deleted) > 0 {
 		result["deleted"] = deleted
+	}
+	if len(unwrappedThenDeleted) > 0 {
+		result["unwrapped_then_deleted"] = unwrappedThenDeleted
+	}
+	if len(wrapped) > 0 {
+		result["wrapped"] = wrapped
 	}
 	if effects.GetGasObject() != nil {
 		result["gasObject"] = legacyOwnedObject(effects.GetGasObject())
@@ -639,29 +672,117 @@ func legacyEvents(transaction *rpcv2.ExecutedTransaction) []any {
 	return result
 }
 
-func legacyBalanceChanges(changes []*rpcv2.BalanceChange) []any {
+func legacyBalanceChanges(transaction *rpcv2.ExecutedTransaction) ([]any, error) {
+	changes := transaction.GetBalanceChanges()
 	result := make([]any, 0, len(changes))
 	for _, change := range changes {
+		owner, err := legacyBalanceChangeOwner(change, transaction.GetEffects())
+		if err != nil {
+			return nil, err
+		}
 		result = append(result, map[string]any{
-			"owner":    map[string]string{"AddressOwner": change.GetAddress()},
+			"owner":    owner,
 			"coinType": canonicalMoveType(change.GetCoinType()),
 			"amount":   change.GetAmount(),
 		})
 	}
-	return result
+	return result, nil
 }
 
-func legacyObjectChanges(transaction *rpcv2.ExecutedTransaction) []any {
+func legacyBalanceChangeOwner(change *rpcv2.BalanceChange, effects *rpcv2.TransactionEffects) (any, error) {
+	if change.GetAddress() == "" {
+		return nil, legacyIncompatibleError(
+			"balanceChanges.owner cannot be mapped because gRPC balance change address is missing",
+		)
+	}
+	if effects == nil {
+		return nil, legacyIncompatibleError(
+			"balanceChanges.owner cannot be mapped without transaction effects",
+		)
+	}
+	wantInputOwner := strings.HasPrefix(change.GetAmount(), "-")
+	var candidate *rpcv2.Owner
+	for _, object := range effects.GetChangedObjects() {
+		if coinTypeFromObjectType(object.GetObjectType()) != normalizeMoveType(change.GetCoinType()) {
+			continue
+		}
+		owner := object.GetOutputOwner()
+		if wantInputOwner {
+			owner = object.GetInputOwner()
+		}
+		if ownerMatchesBalanceAddress(owner, change.GetAddress()) {
+			if candidate == nil {
+				candidate = owner
+				continue
+			}
+			if !sameOwner(candidate, owner) {
+				return nil, legacyIncompatibleError(
+					"balanceChanges.owner cannot be mapped exactly from Sui gRPC v2 transaction effects",
+				)
+			}
+		}
+	}
+	if candidate == nil {
+		return nil, legacyIncompatibleError(
+			"balanceChanges.owner cannot be mapped exactly from Sui gRPC v2 transaction effects",
+		)
+	}
+	return legacyOwner(candidate), nil
+}
+
+func ownerMatchesBalanceAddress(owner *rpcv2.Owner, address string) bool {
+	if owner == nil {
+		return false
+	}
+	switch owner.GetKind() {
+	case rpcv2.Owner_ADDRESS, rpcv2.Owner_OBJECT, rpcv2.Owner_CONSENSUS_ADDRESS:
+		return owner.GetAddress() == address
+	default:
+		return false
+	}
+}
+
+func legacyObjectChanges(transaction *rpcv2.ExecutedTransaction, publishedModules map[string][]string) []any {
 	if transaction.GetEffects() == nil {
 		return []any{}
 	}
 	sender := transaction.GetTransaction().GetSender()
 	mutated := make([]any, 0)
 	created := make([]any, 0)
+	transferred := make([]any, 0)
+	deleted := make([]any, 0)
+	wrapped := make([]any, 0)
+	published := make([]any, 0)
 	for _, object := range transaction.GetEffects().GetChangedObjects() {
-		if object.GetObjectType() == "" || object.GetIdOperation() == rpcv2.ChangedObject_DELETED {
+		if object.GetOutputState() == rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_PACKAGE_WRITE {
+			change := map[string]any{
+				"type":      "published",
+				"packageId": object.GetObjectId(),
+				"version":   strconv.FormatUint(object.GetOutputVersion(), 10),
+				"digest":    object.GetOutputDigest(),
+				"modules":   publishedModules[object.GetObjectId()],
+			}
+			published = append(published, change)
 			continue
 		}
+
+		if object.GetOutputState() == rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_DOES_NOT_EXIST {
+			change := map[string]any{
+				"type":       "wrapped",
+				"sender":     sender,
+				"objectType": canonicalMoveType(object.GetObjectType()),
+				"objectId":   object.GetObjectId(),
+				"version":    strconv.FormatUint(object.GetInputVersion(), 10),
+			}
+			if object.GetIdOperation() == rpcv2.ChangedObject_DELETED {
+				change["type"] = "deleted"
+				deleted = append(deleted, change)
+			} else {
+				wrapped = append(wrapped, change)
+			}
+			continue
+		}
+
 		change := map[string]any{
 			"sender": sender, "objectId": object.GetObjectId(),
 			"objectType": canonicalMoveType(object.GetObjectType()),
@@ -686,11 +807,30 @@ func legacyObjectChanges(transaction *rpcv2.ExecutedTransaction) []any {
 		}
 		if object.GetIdOperation() == rpcv2.ChangedObject_CREATED {
 			created = append(created, change)
+		} else if object.GetOutputState() == rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_OBJECT_WRITE &&
+			!sameOwner(object.GetInputOwner(), object.GetOutputOwner()) {
+			change["type"] = "transferred"
+			change["recipient"] = legacyOwner(object.GetOutputOwner())
+			delete(change, "owner")
+			transferred = append(transferred, change)
 		} else {
 			mutated = append(mutated, change)
 		}
 	}
-	return append(mutated, created...)
+	result := append(mutated, created...)
+	result = append(result, transferred...)
+	result = append(result, deleted...)
+	result = append(result, wrapped...)
+	return append(result, published...)
+}
+
+func sameOwner(left, right *rpcv2.Owner) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.GetKind() == right.GetKind() &&
+		left.GetAddress() == right.GetAddress() &&
+		left.GetVersion() == right.GetVersion()
 }
 
 func enumName(value string) string {

@@ -44,39 +44,59 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, rpcErr := decodeRequest(body)
+	requests, batch, rpcErr := decodeRequests(body)
 	if rpcErr != nil {
-		h.writeResponse(w, errorResponse(req.ID, rpcErr.Code, rpcErr.Message, nil))
+		h.writeResponse(w, errorResponse(nil, rpcErr.Code, rpcErr.Message, nil))
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.timeout)
 	defer cancel()
 
+	if batch {
+		responses := make([]response, 0, len(requests))
+		for _, req := range requests {
+			responses = append(responses, h.handleRequest(ctx, req))
+		}
+		h.writeResponses(w, responses)
+		return
+	}
+
+	h.writeResponse(w, h.handleRequest(ctx, requests[0]))
+}
+
+func (h *Handler) handleRequest(ctx context.Context, req request) response {
+	if req.invalid != nil {
+		return errorResponse(req.ID, req.invalid.Code, req.invalid.Message, nil)
+	}
 	result, err := h.backend.Call(ctx, req.Method, req.Params)
 	if err != nil {
 		var rpcErr *RPCError
 		if errors.As(err, &rpcErr) {
-			h.writeResponse(w, errorResponse(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data))
-			return
+			return errorResponse(req.ID, rpcErr.Code, rpcErr.Message, rpcErr.Data)
 		}
 		code := status.Code(err)
 		h.logger.Error("Sui gRPC request failed", "method", req.Method, "grpc_code", code.String(), "error", err)
-		h.writeResponse(w, errorResponse(req.ID, upstreamError, "Upstream gRPC request failed", map[string]string{
+		return errorResponse(req.ID, upstreamError, "Upstream gRPC request failed", map[string]string{
 			"grpc_code": publicGRPCCode(code),
-		}))
-		return
+		})
 	}
 
-	h.writeResponse(w, response{
+	return response{
 		JSONRPC: "2.0",
 		ID:      req.ID,
 		Result:  result,
-	})
+	}
 }
 
 func (h *Handler) writeResponse(w http.ResponseWriter, value response) {
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		h.logger.Error("Failed to encode JSON-RPC response", "error", err)
+	}
+}
+
+func (h *Handler) writeResponses(w http.ResponseWriter, value []response) {
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		h.logger.Error("Failed to encode JSON-RPC batch response", "error", err)
 	}
 }
 

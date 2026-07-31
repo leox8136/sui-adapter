@@ -16,8 +16,10 @@ import (
 )
 
 const (
-	defaultCoinType = "0x2::sui::SUI"
-	maxPageSize     = uint32(1000)
+	defaultCoinType       = "0x2::sui::SUI"
+	waitForEffectsCert    = "WaitForEffectsCert"
+	waitForLocalExecution = "WaitForLocalExecution"
+	maxPageSize           = uint32(1000)
 )
 
 var moveAddressPattern = regexp.MustCompile(`0x[0-9a-fA-F]+`)
@@ -26,6 +28,7 @@ type SuiBackend struct {
 	ledger    rpcv2.LedgerServiceClient
 	state     rpcv2.StateServiceClient
 	execution rpcv2.TransactionExecutionServiceClient
+	packages  rpcv2.MovePackageServiceClient
 }
 
 func NewSuiBackend(connection grpc.ClientConnInterface) *SuiBackend {
@@ -33,6 +36,7 @@ func NewSuiBackend(connection grpc.ClientConnInterface) *SuiBackend {
 		ledger:    rpcv2.NewLedgerServiceClient(connection),
 		state:     rpcv2.NewStateServiceClient(connection),
 		execution: rpcv2.NewTransactionExecutionServiceClient(connection),
+		packages:  rpcv2.NewMovePackageServiceClient(connection),
 	}
 }
 
@@ -50,8 +54,14 @@ func (b *SuiBackend) Call(ctx context.Context, method string, params json.RawMes
 		return b.balance(ctx, params)
 	case "suix_getCoinMetadata":
 		return b.coinMetadata(ctx, params)
+	case "suix_getCoins":
+		return b.coins(ctx, params)
 	case "suix_getAllCoins":
 		return b.allCoins(ctx, params)
+	case "suix_getAllBalances":
+		return b.allBalances(ctx, params)
+	case "suix_getTotalSupply":
+		return b.totalSupply(ctx, params)
 	case "suix_getReferenceGasPrice":
 		return b.referenceGasPrice(ctx, params)
 	case "sui_dryRunTransactionBlock":
@@ -135,7 +145,11 @@ func (b *SuiBackend) transaction(ctx context.Context, params json.RawMessage) (a
 	if response.GetTransaction() == nil {
 		return nil, fmt.Errorf("transaction data missing")
 	}
-	return legacyTransaction(response.GetTransaction(), options), nil
+	publishedModules, err := b.publishedPackageModules(ctx, response.GetTransaction(), options)
+	if err != nil {
+		return nil, err
+	}
+	return legacyTransaction(response.GetTransaction(), options, publishedModules)
 }
 
 func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMessage) (any, error) {
@@ -144,10 +158,12 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 		return nil, err
 	}
 	var transactionB64 string
-	var signaturesB64 []string
-	if json.Unmarshal(values[0], &transactionB64) != nil ||
-		json.Unmarshal(values[1], &signaturesB64) != nil {
+	if json.Unmarshal(values[0], &transactionB64) != nil {
 		return nil, invalidParamsError()
+	}
+	signaturesB64, err := transactionSignatures(values[1])
+	if err != nil {
+		return nil, err
 	}
 	transactionBytes, err := base64.StdEncoding.DecodeString(transactionB64)
 	if err != nil {
@@ -167,6 +183,18 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 			return nil, invalidParamsError()
 		}
 	}
+	requestType := waitForEffectsCert
+	if len(values) == 4 && !isNull(values[3]) {
+		if json.Unmarshal(values[3], &requestType) != nil ||
+			(requestType != waitForEffectsCert && requestType != waitForLocalExecution) {
+			return nil, invalidParamsError()
+		}
+	}
+	if requestType == waitForLocalExecution {
+		return nil, legacyIncompatibleError(
+			"sui_executeTransactionBlock WaitForLocalExecution requires confirmedLocalExecution semantics that Sui gRPC v2 does not expose",
+		)
+	}
 
 	response, err := b.execution.ExecuteTransaction(ctx, &rpcv2.ExecuteTransactionRequest{
 		Transaction: &rpcv2.Transaction{Bcs: &rpcv2.Bcs{Value: transactionBytes}},
@@ -179,9 +207,11 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 	if response.GetTransaction() == nil {
 		return nil, fmt.Errorf("executed transaction data missing")
 	}
-	result := legacyTransaction(response.GetTransaction(), options)
-	result["confirmedLocalExecution"] = true
-	return result, nil
+	publishedModules, err := b.publishedPackageModules(ctx, response.GetTransaction(), options)
+	if err != nil {
+		return nil, err
+	}
+	return legacyTransaction(response.GetTransaction(), options, publishedModules)
 }
 
 func (b *SuiBackend) dryRunTransaction(ctx context.Context, params json.RawMessage) (any, error) {
@@ -207,7 +237,7 @@ func (b *SuiBackend) dryRunTransaction(ctx context.Context, params json.RawMessa
 	if response.GetTransaction() == nil {
 		return nil, fmt.Errorf("simulated transaction data missing")
 	}
-	return legacyDryRunTransaction(response.GetTransaction()), nil
+	return legacyDryRunTransaction(response.GetTransaction())
 }
 
 func (b *SuiBackend) balance(ctx context.Context, params json.RawMessage) (any, error) {
@@ -225,28 +255,9 @@ func (b *SuiBackend) balance(ctx context.Context, params json.RawMessage) (any, 
 			return nil, invalidParamsError()
 		}
 	}
-	response, err := b.state.GetBalance(ctx, &rpcv2.GetBalanceRequest{
-		Owner: &owner, CoinType: &coinType,
-	})
-	if err != nil {
-		return nil, err
-	}
-	totalBalance := response.GetBalance().GetBalance()
-	count, objectBalance, err := b.coinStats(ctx, owner, coinType)
-	if err != nil {
-		return nil, err
-	}
-	addressBalance := uint64(0)
-	if totalBalance >= objectBalance {
-		addressBalance = totalBalance - objectBalance
-	}
-	return map[string]any{
-		"coinType":              coinType,
-		"coinObjectCount":       count,
-		"totalBalance":          strconv.FormatUint(totalBalance, 10),
-		"lockedBalance":         map[string]string{},
-		"fundsInAddressBalance": strconv.FormatUint(addressBalance, 10),
-	}, nil
+	return nil, legacyIncompatibleError(
+		"suix_getBalance requires lockedBalance, but Sui gRPC v2 Balance does not expose locked balance details",
+	)
 }
 
 func (b *SuiBackend) coinMetadata(ctx context.Context, params json.RawMessage) (any, error) {
@@ -276,8 +287,33 @@ func (b *SuiBackend) coinMetadata(ctx context.Context, params json.RawMessage) (
 	}, nil
 }
 
+func (b *SuiBackend) coins(ctx context.Context, params json.RawMessage) (any, error) {
+	values, err := positionalParams(params, 1, 4)
+	if err != nil {
+		return nil, err
+	}
+	owner, coinType, cursor, pageToken, limit, err := coinPageParams(values)
+	if err != nil {
+		return nil, err
+	}
+	objectType := "0x2::coin::Coin<" + coinType + ">"
+	return b.listCoins(ctx, owner, objectType, cursor, pageToken, limit)
+}
+
 func (b *SuiBackend) allCoins(ctx context.Context, params json.RawMessage) (any, error) {
 	values, err := positionalParams(params, 1, 3)
+	if err != nil {
+		return nil, err
+	}
+	owner, cursor, pageToken, limit, err := allCoinPageParams(values)
+	if err != nil {
+		return nil, err
+	}
+	return b.listCoins(ctx, owner, "0x2::coin::Coin", cursor, pageToken, limit)
+}
+
+func (b *SuiBackend) allBalances(ctx context.Context, params json.RawMessage) (any, error) {
+	values, err := positionalParams(params, 1, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -285,51 +321,29 @@ func (b *SuiBackend) allCoins(ctx context.Context, params json.RawMessage) (any,
 	if json.Unmarshal(values[0], &owner) != nil || owner == "" {
 		return nil, invalidParamsError()
 	}
-	var pageToken []byte
-	if len(values) >= 2 && !isNull(values[1]) {
-		var cursor string
-		if json.Unmarshal(values[1], &cursor) != nil {
-			return nil, invalidParamsError()
-		}
-		pageToken, err = base64.StdEncoding.DecodeString(cursor)
-		if err != nil {
-			return nil, invalidParamsError()
-		}
-	}
-	limit := uint32(50)
-	if len(values) == 3 && !isNull(values[2]) {
-		if json.Unmarshal(values[2], &limit) != nil || limit == 0 || limit > maxPageSize {
-			return nil, invalidParamsError()
-		}
-	}
-	objectType := "0x2::coin::Coin"
-	response, err := b.state.ListOwnedObjects(ctx, &rpcv2.ListOwnedObjectsRequest{
-		Owner: &owner, ObjectType: &objectType, PageSize: &limit, PageToken: pageToken,
-		ReadMask: &fieldmaskpb.FieldMask{Paths: []string{
-			"object_id", "version", "digest", "object_type", "balance", "previous_transaction",
-		}},
-	})
+	return nil, legacyIncompatibleError(
+		"suix_getAllBalances requires lockedBalance for each balance, but Sui gRPC v2 ListBalances does not expose locked balance details",
+	)
+}
+
+func (b *SuiBackend) totalSupply(ctx context.Context, params json.RawMessage) (any, error) {
+	values, err := positionalParams(params, 1, 1)
 	if err != nil {
 		return nil, err
 	}
-	data := make([]map[string]any, 0, len(response.GetObjects()))
-	for _, object := range response.GetObjects() {
-		data = append(data, map[string]any{
-			"coinType":            coinTypeFromObjectType(object.GetObjectType()),
-			"coinObjectId":        object.GetObjectId(),
-			"version":             strconv.FormatUint(object.GetVersion(), 10),
-			"digest":              object.GetDigest(),
-			"balance":             strconv.FormatUint(object.GetBalance(), 10),
-			"previousTransaction": object.GetPreviousTransaction(),
-		})
+	var coinType string
+	if json.Unmarshal(values[0], &coinType) != nil || coinType == "" {
+		return nil, invalidParamsError()
 	}
-	var nextCursor any
-	if len(response.GetNextPageToken()) > 0 {
-		nextCursor = base64.StdEncoding.EncodeToString(response.GetNextPageToken())
+	response, err := b.state.GetCoinInfo(ctx, &rpcv2.GetCoinInfoRequest{CoinType: &coinType})
+	if err != nil {
+		return nil, err
 	}
-	return map[string]any{
-		"data": data, "nextCursor": nextCursor,
-		"hasNextPage": len(response.GetNextPageToken()) > 0,
+	if response.GetTreasury() == nil {
+		return nil, fmt.Errorf("coin treasury data missing")
+	}
+	return map[string]string{
+		"value": strconv.FormatUint(response.GetTreasury().GetTotalSupply(), 10),
 	}, nil
 }
 
@@ -349,30 +363,195 @@ func (b *SuiBackend) referenceGasPrice(ctx context.Context, params json.RawMessa
 	return strconv.FormatUint(response.GetEpoch().GetReferenceGasPrice(), 10), nil
 }
 
-func (b *SuiBackend) coinStats(ctx context.Context, owner, coinType string) (uint64, uint64, error) {
-	objectType := "0x2::coin::Coin<" + coinType + ">"
-	var count uint64
-	var balance uint64
-	var pageToken []byte
+func transactionSignatures(raw json.RawMessage) ([]string, error) {
+	var signatures []string
+	if json.Unmarshal(raw, &signatures) == nil {
+		return signatures, nil
+	}
+	var signature string
+	if json.Unmarshal(raw, &signature) != nil || signature == "" {
+		return nil, invalidParamsError()
+	}
+	return []string{signature}, nil
+}
+
+func (b *SuiBackend) publishedPackageModules(
+	ctx context.Context,
+	transaction *rpcv2.ExecutedTransaction,
+	options transactionOptions,
+) (map[string][]string, error) {
+	if !options.ShowObjectChanges || b.packages == nil || transaction.GetEffects() == nil {
+		return nil, nil
+	}
+	result := map[string][]string{}
+	for _, object := range transaction.GetEffects().GetChangedObjects() {
+		if object.GetOutputState() != rpcv2.ChangedObject_OUTPUT_OBJECT_STATE_PACKAGE_WRITE {
+			continue
+		}
+		packageID := object.GetObjectId()
+		response, err := b.packages.GetPackage(ctx, &rpcv2.GetPackageRequest{PackageId: &packageID})
+		if err != nil {
+			return nil, err
+		}
+		modules := make([]string, 0, len(response.GetPackage().GetModules()))
+		for _, module := range response.GetPackage().GetModules() {
+			if module.GetName() != "" {
+				modules = append(modules, module.GetName())
+			}
+		}
+		result[packageID] = modules
+	}
+	return result, nil
+}
+
+func (b *SuiBackend) listCoins(
+	ctx context.Context,
+	owner string,
+	objectType string,
+	cursor string,
+	pageToken []byte,
+	limit uint32,
+) (map[string]any, error) {
+	readMask := &fieldmaskpb.FieldMask{Paths: []string{
+		"object_id", "version", "digest", "object_type", "balance", "previous_transaction",
+	}}
+	data := make([]map[string]any, 0, limit)
+	collecting := cursor == ""
 	for {
+		pageSize := maxPageSize
+		if collecting {
+			remaining := limit - uint32(len(data))
+			if remaining < pageSize {
+				pageSize = remaining
+			}
+		}
 		response, err := b.state.ListOwnedObjects(ctx, &rpcv2.ListOwnedObjectsRequest{
-			Owner: &owner, ObjectType: &objectType, PageSize: ptr(maxPageSize), PageToken: pageToken,
-			ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"object_id", "balance"}},
+			Owner: &owner, ObjectType: &objectType, PageSize: &pageSize, PageToken: pageToken,
+			ReadMask: readMask,
 		})
 		if err != nil {
-			return 0, 0, err
+			return nil, err
 		}
-		count += uint64(len(response.GetObjects()))
-		for _, object := range response.GetObjects() {
-			if ^uint64(0)-balance < object.GetBalance() {
-				return 0, 0, fmt.Errorf("coin balance overflow")
+		objects := response.GetObjects()
+		for index, object := range objects {
+			if !collecting {
+				if object.GetObjectId() == cursor {
+					collecting = true
+				}
+				continue
 			}
-			balance += object.GetBalance()
+			data = append(data, legacyCoin(object))
+			if uint32(len(data)) == limit {
+				hasNextPage := index < len(objects)-1 || len(response.GetNextPageToken()) > 0
+				var nextCursor any
+				if hasNextPage {
+					nextCursor = object.GetObjectId()
+				}
+				return map[string]any{
+					"data": data, "nextCursor": nextCursor, "hasNextPage": hasNextPage,
+				}, nil
+			}
 		}
 		pageToken = response.GetNextPageToken()
 		if len(pageToken) == 0 {
-			return count, balance, nil
+			if !collecting && cursor != "" {
+				return nil, invalidParamsError()
+			}
+			return map[string]any{
+				"data": data, "nextCursor": nil, "hasNextPage": false,
+			}, nil
 		}
+	}
+}
+
+func coinPageParams(values []json.RawMessage) (string, string, string, []byte, uint32, error) {
+	var owner string
+	if json.Unmarshal(values[0], &owner) != nil || owner == "" {
+		return "", "", "", nil, 0, invalidParamsError()
+	}
+	coinType := defaultCoinType
+	if len(values) >= 2 && !isNull(values[1]) {
+		if json.Unmarshal(values[1], &coinType) != nil || coinType == "" {
+			return "", "", "", nil, 0, invalidParamsError()
+		}
+	}
+	var cursor string
+	var pageToken []byte
+	if len(values) >= 3 && !isNull(values[2]) {
+		if json.Unmarshal(values[2], &cursor) != nil {
+			return "", "", "", nil, 0, invalidParamsError()
+		}
+		if cursor != "" && !strings.HasPrefix(cursor, "0x") {
+			var err error
+			pageToken, err = base64.StdEncoding.DecodeString(cursor)
+			if err != nil {
+				return "", "", "", nil, 0, invalidParamsError()
+			}
+			cursor = ""
+		}
+	}
+	limit := uint32(50)
+	if len(values) >= 4 && !isNull(values[3]) {
+		if json.Unmarshal(values[3], &limit) != nil || limit == 0 || limit > maxPageSize {
+			return "", "", "", nil, 0, invalidParamsError()
+		}
+	}
+	return owner, coinType, cursor, pageToken, limit, nil
+}
+
+func allCoinPageParams(values []json.RawMessage) (string, string, []byte, uint32, error) {
+	var owner string
+	if json.Unmarshal(values[0], &owner) != nil || owner == "" {
+		return "", "", nil, 0, invalidParamsError()
+	}
+	cursor, pageToken, err := cursorPageToken(values, 1)
+	if err != nil {
+		return "", "", nil, 0, err
+	}
+	limit, err := pageLimit(values, 2)
+	if err != nil {
+		return "", "", nil, 0, err
+	}
+	return owner, cursor, pageToken, limit, nil
+}
+
+func cursorPageToken(values []json.RawMessage, index int) (string, []byte, error) {
+	if len(values) <= index || isNull(values[index]) {
+		return "", nil, nil
+	}
+	var cursor string
+	if json.Unmarshal(values[index], &cursor) != nil {
+		return "", nil, invalidParamsError()
+	}
+	if cursor == "" || strings.HasPrefix(cursor, "0x") {
+		return cursor, nil, nil
+	}
+	pageToken, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return "", nil, invalidParamsError()
+	}
+	return "", pageToken, nil
+}
+
+func pageLimit(values []json.RawMessage, index int) (uint32, error) {
+	limit := uint32(50)
+	if len(values) <= index || isNull(values[index]) {
+		return limit, nil
+	}
+	if json.Unmarshal(values[index], &limit) != nil || limit == 0 || limit > maxPageSize {
+		return 0, invalidParamsError()
+	}
+	return limit, nil
+}
+
+func legacyCoin(object *rpcv2.Object) map[string]any {
+	return map[string]any{
+		"coinType":            coinTypeFromObjectType(object.GetObjectType()),
+		"coinObjectId":        object.GetObjectId(),
+		"version":             strconv.FormatUint(object.GetVersion(), 10),
+		"digest":              object.GetDigest(),
+		"balance":             strconv.FormatUint(object.GetBalance(), 10),
+		"previousTransaction": object.GetPreviousTransaction(),
 	}
 }
 

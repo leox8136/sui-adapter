@@ -18,22 +18,38 @@ Currently supported JSON-RPC methods:
 - `sui_executeTransactionBlock`
 - `suix_getBalance`
 - `suix_getCoinMetadata`
+- `suix_getCoins`
 - `suix_getAllCoins`
+- `suix_getAllBalances`
+- `suix_getTotalSupply`
 - `suix_getReferenceGasPrice`
 - `sui_dryRunTransactionBlock`
 
-Unsupported methods return JSON-RPC error `-32601`.
+Unsupported methods return JSON-RPC error `-32601`. Implemented methods return
+JSON-RPC error `-32001` when a requested legacy field cannot be represented
+strictly from Sui gRPC v2 data.
 
 The adapter accepts the legacy positional parameters and returns the legacy
-JSON-RPC field names. Pagination cursors returned by `suix_getAllCoins` are
-adapter-generated opaque cursors and must be passed back unchanged. A cursor
-created by an old JSON-RPC node cannot be resumed through the adapter.
+JSON-RPC field names. Batch requests return JSON-RPC response arrays, and
+successful methods with no value return `"result": null`. Pagination cursors
+returned by `suix_getCoins` and `suix_getAllCoins` use the legacy coin object id
+shape; cursors returned by an earlier adapter build are still accepted as a
+transition path.
+
+`suix_getBalance` and `suix_getAllBalances` return `-32001` because the legacy
+responses require `lockedBalance`, and Sui gRPC v2 balance APIs do not expose
+the locked-balance details needed to fill that field strictly.
 
 Sui gRPC does not expose every legacy field with the same response structure.
 The adapter reconstructs parsed transaction input and effects, and wraps the
 gRPC transaction BCS with its intent and signatures to restore the legacy
 `rawTransaction` value. Clients that require exact binary transaction data
 should prefer `rawTransaction` and `rawEffects` over the parsed fields.
+When `showBalanceChanges` is requested, `balanceChanges.owner` is returned only
+when it can be mapped uniquely from transaction effects; otherwise the adapter
+returns `-32001` instead of guessing an owner. `WaitForLocalExecution` on
+`sui_executeTransactionBlock` also returns `-32001` because gRPC v2 does not
+expose the legacy `confirmedLocalExecution` confirmation.
 
 `SimulateTransaction` can evaluate a transaction against current object state
 in cases where the retired JSON-RPC dry-run rejected stale input references.

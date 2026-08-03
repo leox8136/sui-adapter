@@ -255,9 +255,14 @@ func (b *SuiBackend) balance(ctx context.Context, params json.RawMessage) (any, 
 			return nil, invalidParamsError()
 		}
 	}
-	return nil, legacyIncompatibleError(
-		"suix_getBalance requires lockedBalance, but Sui gRPC v2 Balance does not expose locked balance details",
-	)
+	response, err := b.state.GetBalance(ctx, &rpcv2.GetBalanceRequest{
+		Owner:    &owner,
+		CoinType: &coinType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return legacyBalance(response.GetBalance()), nil
 }
 
 func (b *SuiBackend) coinMetadata(ctx context.Context, params json.RawMessage) (any, error) {
@@ -321,9 +326,22 @@ func (b *SuiBackend) allBalances(ctx context.Context, params json.RawMessage) (a
 	if json.Unmarshal(values[0], &owner) != nil || owner == "" {
 		return nil, invalidParamsError()
 	}
-	return nil, legacyIncompatibleError(
-		"suix_getAllBalances requires lockedBalance for each balance, but Sui gRPC v2 ListBalances does not expose locked balance details",
-	)
+	response, err := b.state.ListBalances(ctx, &rpcv2.ListBalancesRequest{Owner: &owner})
+	if err != nil {
+		return nil, err
+	}
+	balances := make([]map[string]any, 0, len(response.GetBalances()))
+	for _, balance := range response.GetBalances() {
+		balances = append(balances, legacyBalance(balance))
+	}
+	return balances, nil
+}
+
+func legacyBalance(balance *rpcv2.Balance) map[string]any {
+	return map[string]any{
+		"coinType":     balance.GetCoinType(),
+		"totalBalance": strconv.FormatUint(balance.GetBalance(), 10),
+	}
 }
 
 func (b *SuiBackend) totalSupply(ctx context.Context, params json.RawMessage) (any, error) {

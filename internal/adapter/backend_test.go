@@ -193,13 +193,33 @@ func TestExecuteTransactionAcceptsSingleSignature(t *testing.T) {
 	}
 }
 
-func TestBalanceRequiresStrictLockedBalanceSource(t *testing.T) {
-	backend := &SuiBackend{state: &fakeStateClient{}}
+func TestBalanceUsesGRPCBalanceWithoutLockedBalance(t *testing.T) {
+	state := &fakeStateClient{
+		balanceResponse: &rpcv2.GetBalanceResponse{
+			Balance: &rpcv2.Balance{
+				CoinType: ptr("0x2::sui::SUI"),
+				Balance:  ptr(uint64(12345)),
+			},
+		},
+	}
+	backend := &SuiBackend{state: state}
 
-	_, err := backend.balance(context.Background(), json.RawMessage(`["0xabc"]`))
-	rpcErr, ok := err.(*RPCError)
-	if !ok || rpcErr.Code != legacyIncompatible {
-		t.Fatalf("balance() error = %+v, want legacy incompatible", err)
+	result, err := backend.balance(context.Background(), json.RawMessage(`["0xabc","0x2::sui::SUI"]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := result.(map[string]any)
+	if legacy["coinType"] != "0x2::sui::SUI" || legacy["totalBalance"] != "12345" {
+		t.Fatalf("unexpected balance result: %+v", legacy)
+	}
+	if _, ok := legacy["lockedBalance"]; ok {
+		t.Fatalf("lockedBalance should be omitted: %+v", legacy)
+	}
+	if got := state.balanceRequest.GetOwner(); got != "0xabc" {
+		t.Fatalf("balance owner = %q, want 0xabc", got)
+	}
+	if got := state.balanceRequest.GetCoinType(); got != "0x2::sui::SUI" {
+		t.Fatalf("balance coin type = %q, want 0x2::sui::SUI", got)
 	}
 }
 
@@ -283,13 +303,32 @@ func TestGetCoinsFiltersByCoinTypeAndUsesOfficialCursor(t *testing.T) {
 	}
 }
 
-func TestAllBalancesRequiresStrictLockedBalanceSource(t *testing.T) {
-	backend := &SuiBackend{state: &fakeStateClient{}}
+func TestAllBalancesUsesGRPCBalancesWithoutLockedBalance(t *testing.T) {
+	state := &fakeStateClient{
+		listBalancesResponses: []*rpcv2.ListBalancesResponse{
+			{
+				Balances: []*rpcv2.Balance{
+					{CoinType: ptr("0x2::sui::SUI"), Balance: ptr(uint64(100))},
+					{CoinType: ptr("0x2::foo::FOO"), Balance: ptr(uint64(200))},
+				},
+			},
+		},
+	}
+	backend := &SuiBackend{state: state}
 
-	_, err := backend.allBalances(context.Background(), json.RawMessage(`["0xowner"]`))
-	rpcErr, ok := err.(*RPCError)
-	if !ok || rpcErr.Code != legacyIncompatible {
-		t.Fatalf("allBalances() error = %+v, want legacy incompatible", err)
+	result, err := backend.allBalances(context.Background(), json.RawMessage(`["0xowner"]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	balances := result.([]map[string]any)
+	if len(balances) != 2 || balances[0]["totalBalance"] != "100" || balances[1]["coinType"] != "0x2::foo::FOO" {
+		t.Fatalf("unexpected all balances result: %+v", balances)
+	}
+	if _, ok := balances[0]["lockedBalance"]; ok {
+		t.Fatalf("lockedBalance should be omitted: %+v", balances[0])
+	}
+	if got := state.listBalancesRequest.GetOwner(); got != "0xowner" {
+		t.Fatalf("all balances owner = %q, want 0xowner", got)
 	}
 }
 
@@ -627,9 +666,11 @@ func (f *fakePackageClient) ListPackageVersions(
 
 type fakeStateClient struct {
 	balanceResponse           *rpcv2.GetBalanceResponse
+	balanceRequest            *rpcv2.GetBalanceRequest
 	coinInfoResponse          *rpcv2.GetCoinInfoResponse
 	listBalancesResponses     []*rpcv2.ListBalancesResponse
 	listBalancesCalls         int
+	listBalancesRequest       *rpcv2.ListBalancesRequest
 	listOwnedObjectsResponses []*rpcv2.ListOwnedObjectsResponse
 	listOwnedObjectsCalls     int
 	listOwnedObjectsRequests  []*rpcv2.ListOwnedObjectsRequest
@@ -665,19 +706,21 @@ func (f *fakeStateClient) GetCoinInfo(
 }
 
 func (f *fakeStateClient) GetBalance(
-	context.Context,
-	*rpcv2.GetBalanceRequest,
-	...grpc.CallOption,
+	_ context.Context,
+	arguments *rpcv2.GetBalanceRequest,
+	_ ...grpc.CallOption,
 ) (*rpcv2.GetBalanceResponse, error) {
+	f.balanceRequest = arguments
 	return f.balanceResponse, nil
 }
 
 func (f *fakeStateClient) ListBalances(
-	context.Context,
-	*rpcv2.ListBalancesRequest,
-	...grpc.CallOption,
+	_ context.Context,
+	arguments *rpcv2.ListBalancesRequest,
+	_ ...grpc.CallOption,
 ) (*rpcv2.ListBalancesResponse, error) {
 	f.listBalancesCalls++
+	f.listBalancesRequest = arguments
 	if len(f.listBalancesResponses) >= f.listBalancesCalls {
 		return f.listBalancesResponses[f.listBalancesCalls-1], nil
 	}

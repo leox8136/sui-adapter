@@ -140,13 +140,18 @@ func TestExecuteTransactionRequestType(t *testing.T) {
 		wantCode      int
 	}{
 		{name: "wait for effects", requestType: waitForEffectsCert},
-		{name: "wait for local execution", requestType: waitForLocalExecution, wantErr: true, wantCode: legacyIncompatible},
+		{name: "wait for local execution", requestType: waitForLocalExecution, wantConfirmed: true},
 		{name: "unknown", requestType: "ImmediateReturn", wantErr: true, wantCode: invalidParams},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			backend := &SuiBackend{execution: &fakeExecutionClient{response: response}}
+			backend := &SuiBackend{
+				execution: &fakeExecutionClient{response: response},
+				ledger: &fakeLedgerClient{response: &rpcv2.GetTransactionResponse{
+					Transaction: &rpcv2.ExecutedTransaction{Digest: ptr("digest")},
+				}},
+			}
 			params := json.RawMessage(`["` + transaction + `",["` + signature + `"],{},"` + test.requestType + `"]`)
 
 			result, err := backend.executeTransaction(context.Background(), params)
@@ -170,6 +175,30 @@ func TestExecuteTransactionRequestType(t *testing.T) {
 				t.Fatalf("confirmedLocalExecution = %v, present %v, want present %v", got, ok, test.wantConfirmed)
 			}
 		})
+	}
+}
+
+func TestExecuteTransactionLocalConfirmationUnavailable(t *testing.T) {
+	transaction := base64.StdEncoding.EncodeToString([]byte{1, 2})
+	signature := base64.StdEncoding.EncodeToString([]byte{3, 4})
+	backend := &SuiBackend{
+		execution: &fakeExecutionClient{response: &rpcv2.ExecuteTransactionResponse{
+			Transaction: &rpcv2.ExecutedTransaction{Digest: ptr("digest")},
+		}},
+		ledger: &fakeLedgerClient{},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := backend.executeTransaction(ctx, json.RawMessage(
+		`["`+transaction+`",["`+signature+`"],{},"WaitForLocalExecution"]`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := result.(map[string]any)
+	if legacy["digest"] != "digest" || legacy["confirmedLocalExecution"] != false {
+		t.Fatalf("unexpected unconfirmed execution result: %+v", legacy)
 	}
 }
 
@@ -607,6 +636,21 @@ func TestLegacyPureInputs(t *testing.T) {
 type fakeExecutionClient struct {
 	request  *rpcv2.ExecuteTransactionRequest
 	response *rpcv2.ExecuteTransactionResponse
+}
+
+type fakeLedgerClient struct {
+	rpcv2.LedgerServiceClient
+	request  *rpcv2.GetTransactionRequest
+	response *rpcv2.GetTransactionResponse
+}
+
+func (f *fakeLedgerClient) GetTransaction(
+	_ context.Context,
+	request *rpcv2.GetTransactionRequest,
+	_ ...grpc.CallOption,
+) (*rpcv2.GetTransactionResponse, error) {
+	f.request = request
+	return f.response, nil
 }
 
 func (f *fakeExecutionClient) ExecuteTransaction(

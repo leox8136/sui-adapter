@@ -2,7 +2,8 @@
 
 The adapter keeps the existing HTTP JSON-RPC endpoint available while a Sui
 node is migrated to gRPC. Each instance connects to exactly one gRPC target.
-Node selection remains in OpenResty.
+Load balancing and node selection are the responsibility of the caller or an
+upstream gateway.
 
 The gRPC client is generated directly from MystenLabs'
 [`sui-apis`](https://github.com/MystenLabs/sui-apis) protobuf definitions.
@@ -47,9 +48,12 @@ gRPC transaction BCS with its intent and signatures to restore the legacy
 should prefer `rawTransaction` and `rawEffects` over the parsed fields.
 When `showBalanceChanges` is requested, `balanceChanges.owner` is returned only
 when it can be mapped uniquely from transaction effects; otherwise the adapter
-returns `-32001` instead of guessing an owner. `WaitForLocalExecution` on
-`sui_executeTransactionBlock` also returns `-32001` because gRPC v2 does not
-expose the legacy `confirmedLocalExecution` confirmation.
+returns `-32001` instead of guessing an owner. For `WaitForLocalExecution`, the
+adapter executes the transaction and then confirms that its digest is available
+through the same gRPC ledger service. It returns `confirmedLocalExecution: true`
+only after that lookup succeeds, or `false` when confirmation cannot be obtained
+within the bounded wait. A false confirmation does not mean transaction failure;
+clients must not blindly resubmit the transaction.
 
 `SimulateTransaction` can evaluate a transaction against current object state
 in cases where the retired JSON-RPC dry-run rejected stale input references.
@@ -67,7 +71,10 @@ synthetic JSON-RPC error.
 | `REQUEST_TIMEOUT` | `10s` | Per-request upstream timeout |
 | `MAX_BODY_BYTES` | `1048576` | Maximum JSON-RPC request size |
 
-## Deploy on each node
+## Run beside a Sui node
+
+When the Sui gRPC service is available on the same host, bind the Adapter to a
+loopback address and connect it to the node's local gRPC listener:
 
 ```sh
 docker build -t sui-jsonrpc-adapter .
@@ -76,42 +83,38 @@ docker run -d --restart unless-stopped \
   --network host \
   -e SUI_GRPC_TARGET=127.0.0.1:9000 \
   -e SUI_GRPC_TLS=false \
-  -e LISTEN_ADDRESS=127.0.0.1:18080 \
+  -e LISTEN_ADDRESS=127.0.0.1:8080 \
   sui-jsonrpc-adapter
 ```
 
-Keep the node's existing port `10001` and route only `/sui` to the adapter:
+If a reverse proxy exposes the compatibility endpoint, forward `/sui` to the
+Adapter's configured listener. Access control, TLS termination, and the public
+listen address belong in the deployment environment rather than this project.
 
 ```nginx
 location /sui {
-    proxy_pass http://127.0.0.1:18080;
+    proxy_pass http://127.0.0.1:8080;
 }
 ```
 
-The existing OpenResty targets remain unchanged:
+## Connect to a remote gRPC endpoint
 
-```text
-http://203.117.22.213:10001/sui
-http://128.106.101.254:10001/sui
-```
-
-## Deploy beside OpenResty for the official node
-
-Use the same image with TLS enabled:
+For a remote gRPC service, enable TLS and provide its authority. This example
+uses Sui's public mainnet gRPC endpoint:
 
 ```sh
 docker run -d --restart unless-stopped \
-  --name sui-official-adapter \
+  --name sui-jsonrpc-adapter \
   -e SUI_GRPC_TARGET=fullnode.mainnet.sui.io:443 \
   -e SUI_GRPC_TLS=true \
-  -p 127.0.0.1:18081:8080 \
+  -p 127.0.0.1:8080:8080 \
   sui-jsonrpc-adapter
 ```
 
 Check the compatibility endpoint:
 
 ```sh
-curl -s http://127.0.0.1:18081/sui \
+curl -s http://127.0.0.1:8080/sui \
   -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"sui_getLatestCheckpointSequenceNumber","params":[]}'
 ```

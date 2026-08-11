@@ -8,10 +8,13 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	rpcv2 "sui-adapter/internal/suiv2"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -19,6 +22,8 @@ const (
 	defaultCoinType       = "0x2::sui::SUI"
 	waitForEffectsCert    = "WaitForEffectsCert"
 	waitForLocalExecution = "WaitForLocalExecution"
+	localExecutionTimeout = 5 * time.Second
+	localExecutionPoll    = 200 * time.Millisecond
 	maxPageSize           = uint32(1000)
 )
 
@@ -190,12 +195,6 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 			return nil, invalidParamsError()
 		}
 	}
-	if requestType == waitForLocalExecution {
-		return nil, legacyIncompatibleError(
-			"sui_executeTransactionBlock WaitForLocalExecution requires confirmedLocalExecution semantics that Sui gRPC v2 does not expose",
-		)
-	}
-
 	response, err := b.execution.ExecuteTransaction(ctx, &rpcv2.ExecuteTransactionRequest{
 		Transaction: &rpcv2.Transaction{Bcs: &rpcv2.Bcs{Value: transactionBytes}},
 		Signatures:  signatures,
@@ -211,7 +210,47 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 	if err != nil {
 		return nil, err
 	}
-	return legacyTransaction(response.GetTransaction(), options, publishedModules)
+	result, err := legacyTransaction(response.GetTransaction(), options, publishedModules)
+	if err != nil {
+		return nil, err
+	}
+	if requestType == waitForLocalExecution {
+		result["confirmedLocalExecution"] = b.confirmLocalExecution(ctx, response.GetTransaction().GetDigest())
+	}
+	return result, nil
+}
+
+func (b *SuiBackend) confirmLocalExecution(ctx context.Context, digest string) bool {
+	if digest == "" || b.ledger == nil {
+		return false
+	}
+
+	confirmationContext, cancel := context.WithTimeout(ctx, localExecutionTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(localExecutionPoll)
+	defer ticker.Stop()
+	for {
+		response, err := b.ledger.GetTransaction(confirmationContext, &rpcv2.GetTransactionRequest{
+			Digest:   &digest,
+			ReadMask: &fieldmaskpb.FieldMask{Paths: []string{"digest"}},
+		})
+		if err == nil && response.GetTransaction() != nil {
+			return response.GetTransaction().GetDigest() == digest
+		}
+		if err != nil {
+			code := status.Code(err)
+			if code != codes.NotFound && code != codes.Unavailable && code != codes.DeadlineExceeded {
+				return false
+			}
+		}
+
+		select {
+		case <-confirmationContext.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
 }
 
 func (b *SuiBackend) dryRunTransaction(ctx context.Context, params json.RawMessage) (any, error) {

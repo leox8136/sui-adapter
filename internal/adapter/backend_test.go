@@ -596,40 +596,13 @@ func TestLegacyBalanceChangesRejectsAmbiguousOwner(t *testing.T) {
 	}
 }
 
-func TestLegacyPureInputs(t *testing.T) {
-	addressBytes := make([]byte, 32)
-	addressBytes[31] = 42
-	tests := []struct {
-		name  string
-		input *rpcv2.Input
-		want  map[string]any
-	}{
-		{
-			name: "u64",
-			input: &rpcv2.Input{
-				Kind: ptr(rpcv2.Input_PURE),
-				Pure: []byte{42, 0, 0, 0, 0, 0, 0, 0},
-			},
-			want: map[string]any{"type": "pure", "valueType": "u64", "value": "42"},
-		},
-		{
-			name: "address",
-			input: &rpcv2.Input{
-				Kind: ptr(rpcv2.Input_PURE),
-				Pure: addressBytes,
-			},
-			want: map[string]any{
-				"type": "pure", "valueType": "address",
-				"value": "0x000000000000000000000000000000000000000000000000000000000000002a",
-			},
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := legacyPureInput(test.input); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("legacyPureInput() = %#v, want %#v", got, test.want)
-			}
-		})
+func TestLegacyPureInputsRejectAmbiguousTypes(t *testing.T) {
+	for _, size := range []int{0, 1, 2, 4, 8, 16, 32, 33} {
+		_, err := legacyPureInput(&rpcv2.Input{Kind: ptr(rpcv2.Input_PURE), Pure: make([]byte, size)})
+		rpcErr, ok := err.(*RPCError)
+		if !ok || rpcErr.Code != legacyIncompatible {
+			t.Fatalf("size %d: expected compatibility error, got %v", size, err)
+		}
 	}
 }
 

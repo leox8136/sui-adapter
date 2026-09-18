@@ -189,11 +189,19 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 		}
 	}
 	requestType := waitForEffectsCert
+	if options.ShowEffects || options.ShowEvents || options.ShowBalanceChanges || options.ShowObjectChanges || options.ShowRawEffects {
+		requestType = waitForLocalExecution
+	}
 	if len(values) == 4 && !isNull(values[3]) {
 		if json.Unmarshal(values[3], &requestType) != nil ||
 			(requestType != waitForEffectsCert && requestType != waitForLocalExecution) {
 			return nil, invalidParamsError()
 		}
+	}
+	// Reject unsupported parsed output before submitting a signed transaction.
+	// Its BCS inputs cannot be typed without resolving Move parameter layouts.
+	if options.ShowInput {
+		return nil, legacyIncompatibleError("executeTransactionBlock showInput is unavailable; use showRawInput instead")
 	}
 	response, err := b.execution.ExecuteTransaction(ctx, &rpcv2.ExecuteTransactionRequest{
 		Transaction: &rpcv2.Transaction{Bcs: &rpcv2.Bcs{Value: transactionBytes}},
@@ -365,13 +373,28 @@ func (b *SuiBackend) allBalances(ctx context.Context, params json.RawMessage) (a
 	if json.Unmarshal(values[0], &owner) != nil || owner == "" {
 		return nil, invalidParamsError()
 	}
-	response, err := b.state.ListBalances(ctx, &rpcv2.ListBalancesRequest{Owner: &owner})
-	if err != nil {
-		return nil, err
-	}
-	balances := make([]map[string]any, 0, len(response.GetBalances()))
-	for _, balance := range response.GetBalances() {
-		balances = append(balances, legacyBalance(balance))
+	balances := make([]map[string]any, 0)
+	var pageToken []byte
+	seenTokens := map[string]bool{}
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		response, err := b.state.ListBalances(ctx, &rpcv2.ListBalancesRequest{Owner: &owner, PageToken: pageToken})
+		if err != nil {
+			return nil, err
+		}
+		for _, balance := range response.GetBalances() {
+			balances = append(balances, legacyBalance(balance))
+		}
+		pageToken = response.GetNextPageToken()
+		if len(pageToken) == 0 {
+			break
+		}
+		if seenTokens[string(pageToken)] {
+			return nil, fmt.Errorf("upstream repeated balance page token")
+		}
+		seenTokens[string(pageToken)] = true
 	}
 	return balances, nil
 }
@@ -629,7 +652,10 @@ func transactionReadMask(options transactionOptions) *fieldmaskpb.FieldMask {
 	} else if options.ShowRawInput {
 		paths = append(paths, "transaction.bcs")
 	}
-	if options.ShowEffects || options.ShowRawEffects || options.ShowObjectChanges {
+	if options.ShowObjectChanges && !options.ShowInput {
+		paths = append(paths, "transaction.sender")
+	}
+	if options.ShowEffects || options.ShowRawEffects || options.ShowObjectChanges || options.ShowBalanceChanges {
 		paths = append(paths, "effects")
 	}
 	if options.ShowEvents {

@@ -2,9 +2,6 @@ package adapter
 
 import (
 	"encoding/base64"
-	"encoding/binary"
-	"encoding/hex"
-	"math/big"
 	"strconv"
 	"strings"
 
@@ -111,7 +108,11 @@ func legacyTransaction(
 	}
 	signatures := legacySignatures(transaction.GetSignatures())
 	if options.ShowInput && transaction.GetTransaction() != nil {
-		result["transaction"] = legacyTransactionInput(transaction.GetTransaction(), signatures)
+		input, err := legacyTransactionInput(transaction.GetTransaction(), signatures)
+		if err != nil {
+			return nil, err
+		}
+		result["transaction"] = input
 	}
 	if options.ShowRawInput && transaction.GetTransaction().GetBcs() != nil {
 		result["rawTransaction"] = legacyRawTransaction(
@@ -152,10 +153,12 @@ func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction) (map[string
 	delete(result, "digest")
 	delete(result, "checkpoint")
 	delete(result, "timestampMs")
-	result["input"] = result["transaction"]
+	if input, ok := result["transaction"].(map[string]any); ok {
+		result["input"] = input["data"]
+	}
 	delete(result, "transaction")
 	if status := transaction.GetEffects().GetStatus(); status != nil && !status.GetSuccess() {
-		result["executionError"] = status.GetError().GetDescription()
+		result["executionErrorSource"] = status.GetError().GetDescription()
 	}
 	return result, nil
 }
@@ -199,8 +202,11 @@ func appendULEB128(destination []byte, value uint64) []byte {
 	}
 }
 
-func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string) map[string]any {
-	kind := legacyTransactionKind(transaction.GetKind())
+func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string) (map[string]any, error) {
+	kind, err := legacyTransactionKind(transaction.GetKind())
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"data": map[string]any{
 			"messageVersion": "v1",
@@ -209,17 +215,21 @@ func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string)
 			"gasData":        legacyProtoGasData(transaction.GetGasPayment()),
 		},
 		"txSignatures": signatures,
-	}
+	}, nil
 }
 
-func legacyTransactionKind(kind *rpcv2.TransactionKind) map[string]any {
+func legacyTransactionKind(kind *rpcv2.TransactionKind) (map[string]any, error) {
 	if kind == nil {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	if programmable := kind.GetProgrammableTransaction(); programmable != nil {
 		inputs := make([]any, 0, len(programmable.GetInputs()))
 		for _, input := range programmable.GetInputs() {
-			inputs = append(inputs, legacyInput(input))
+			value, err := legacyInput(input)
+			if err != nil {
+				return nil, err
+			}
+			inputs = append(inputs, value)
 		}
 		commands := make([]any, 0, len(programmable.GetCommands()))
 		for _, command := range programmable.GetCommands() {
@@ -227,12 +237,12 @@ func legacyTransactionKind(kind *rpcv2.TransactionKind) map[string]any {
 		}
 		return map[string]any{
 			"kind": "ProgrammableTransaction", "inputs": inputs, "transactions": commands,
-		}
+		}, nil
 	}
 	if prologue := kind.GetConsensusCommitPrologue(); prologue != nil {
-		return legacyConsensusCommitPrologue(kind.GetKind(), prologue)
+		return legacyConsensusCommitPrologue(kind.GetKind(), prologue), nil
 	}
-	return map[string]any{"kind": enumName(kind.GetKind().String())}
+	return map[string]any{"kind": enumName(kind.GetKind().String())}, nil
 }
 
 func legacyConsensusCommitPrologue(
@@ -280,7 +290,7 @@ func legacyConsensusCommitPrologue(
 	return result
 }
 
-func legacyInput(input *rpcv2.Input) any {
+func legacyInput(input *rpcv2.Input) (any, error) {
 	switch input.GetKind() {
 	case rpcv2.Input_PURE:
 		return legacyPureInput(input)
@@ -290,109 +300,30 @@ func legacyInput(input *rpcv2.Input) any {
 			"objectId": input.GetObjectId(),
 			"version":  strconv.FormatUint(input.GetVersion(), 10),
 			"digest":   input.GetDigest(),
-		}
+		}, nil
 	case rpcv2.Input_SHARED:
 		return map[string]any{
 			"type": "object", "objectType": "sharedObject",
 			"objectId":             input.GetObjectId(),
 			"initialSharedVersion": strconv.FormatUint(input.GetVersion(), 10),
 			"mutable":              input.GetMutable(),
-		}
+		}, nil
 	case rpcv2.Input_RECEIVING:
 		return map[string]any{
 			"type": "object", "objectType": "receiving",
 			"objectId": input.GetObjectId(),
 			"version":  strconv.FormatUint(input.GetVersion(), 10),
 			"digest":   input.GetDigest(),
-		}
+		}, nil
 	default:
-		return map[string]any{}
+		return nil, legacyIncompatibleError("transaction input kind cannot be represented in legacy JSON-RPC")
 	}
 }
 
-func legacyPureInput(input *rpcv2.Input) map[string]any {
-	result := map[string]any{"type": "pure"}
-	if literal := input.GetLiteral(); literal != nil {
-		value := literal.AsInterface()
-		result["value"] = value
-		switch value.(type) {
-		case bool:
-			result["valueType"] = "bool"
-		case string:
-			if strings.HasPrefix(value.(string), "0x") {
-				result["valueType"] = "address"
-			} else {
-				result["valueType"] = "string"
-			}
-		case float64:
-			result["valueType"] = uintTypeForSize(len(input.GetPure()))
-			if len(input.GetPure()) >= 8 {
-				result["value"] = strconv.FormatUint(uintFromLittleEndian(input.GetPure()), 10)
-			}
-		default:
-			result["valueType"] = "vector"
-		}
-		return result
-	}
-
-	bytes := input.GetPure()
-	switch len(bytes) {
-	case 1:
-		if bytes[0] <= 1 {
-			result["valueType"] = "bool"
-			result["value"] = bytes[0] == 1
-		} else {
-			result["valueType"] = "u8"
-			result["value"] = uint64(bytes[0])
-		}
-	case 2, 4:
-		result["valueType"] = uintTypeForSize(len(bytes))
-		result["value"] = uintFromLittleEndian(bytes)
-	case 8:
-		result["valueType"] = "u64"
-		result["value"] = strconv.FormatUint(binary.LittleEndian.Uint64(bytes), 10)
-	case 16:
-		result["valueType"] = "u128"
-		result["value"] = littleEndianBigInt(bytes).String()
-	case 32:
-		result["valueType"] = "address"
-		result["value"] = "0x" + hex.EncodeToString(bytes)
-	default:
-		result["valueType"] = "unknown"
-		result["value"] = base64.StdEncoding.EncodeToString(bytes)
-	}
-	return result
-}
-
-func uintTypeForSize(size int) string {
-	switch size {
-	case 1:
-		return "u8"
-	case 2:
-		return "u16"
-	case 4:
-		return "u32"
-	default:
-		return "u64"
-	}
-}
-
-func uintFromLittleEndian(value []byte) uint64 {
-	var padded [8]byte
-	copy(padded[:], value)
-	return binary.LittleEndian.Uint64(padded[:])
-}
-
-func littleEndianBigInt(value []byte) *big.Int {
-	return new(big.Int).SetBytes(reverseCopy(value))
-}
-
-func reverseCopy(value []byte) []byte {
-	result := append([]byte(nil), value...)
-	for left, right := 0, len(result)-1; left < right; left, right = left+1, right-1 {
-		result[left], result[right] = result[right], result[left]
-	}
-	return result
+// BCS is not self-describing, and Input.literal is input-only in gRPC.
+// Until Move parameter layouts are resolved, never infer types from byte length.
+func legacyPureInput(_ *rpcv2.Input) (map[string]any, error) {
+	return nil, legacyIncompatibleError("parsed pure input requires Move type information; request showRawInput without showInput instead")
 }
 
 func legacyCommand(command *rpcv2.Command) any {

@@ -30,26 +30,41 @@ Unsupported methods return JSON-RPC error `-32601`. Implemented methods return
 JSON-RPC error `-32001` when a requested legacy field cannot be represented
 strictly from Sui gRPC v2 data.
 
-The adapter accepts the legacy positional parameters and returns the legacy
-JSON-RPC field names. Batch requests return JSON-RPC response arrays, and
-successful methods with no value return `"result": null`. Pagination cursors
+The adapter accepts legacy positional parameters and uses legacy JSON-RPC
+field names, with the compatibility exceptions documented below. Batch requests
+return JSON-RPC response arrays, and successful methods with no value return `"result": null`. Pagination cursors
 returned by `suix_getCoins` and `suix_getAllCoins` use the legacy coin object id
 shape; cursors returned by an earlier adapter build are still accepted as a
 transition path.
 
-`suix_getBalance` and `suix_getAllBalances` return `-32001` because the legacy
-responses require `lockedBalance`, and Sui gRPC v2 balance APIs do not expose
-the locked-balance details needed to fill that field strictly.
+`suix_getBalance` and `suix_getAllBalances` return `coinType` and `totalBalance`.
+They omit `coinObjectCount` and `lockedBalance`, which are not supplied by the
+gRPC balance response. Clients requiring those legacy fields need adaptation.
+`suix_getAllBalances` follows every gRPC page and fails the entire request if
+any page fails; it never returns a partial list as a complete balance list.
 
 Sui gRPC does not expose every legacy field with the same response structure.
-The adapter reconstructs parsed transaction input and effects, and wraps the
+The adapter converts supported parsed transaction input and effects, and wraps the
 gRPC transaction BCS with its intent and signatures to restore the legacy
 `rawTransaction` value. Clients that require exact binary transaction data
 should prefer `rawTransaction` and `rawEffects` over the parsed fields.
+Parsed pure inputs require Move parameter type information. BCS byte length
+cannot distinguish, for example, `u256` from `address` or `u8` from `bool`.
+Until a Move type resolver is implemented, `showInput` reads and dry-run calls
+containing pure inputs return `-32001`; raw input remains available with
+`showRawInput: true` and `showInput: false`. Execution requests with
+`showInput: true` are rejected **before submission**, since the adapter cannot
+promise a correctly typed parsed response. Submit with `showInput: false`.
+Unknown input kinds also return `-32001` rather than an empty object.
+
 When `showBalanceChanges` is requested, `balanceChanges.owner` is returned only
 when it can be mapped uniquely from transaction effects; otherwise the adapter
-returns `-32001` instead of guessing an owner. For `WaitForLocalExecution`, the
-adapter executes the transaction and then confirms that its digest is available
+returns `-32001` instead of guessing an owner.
+
+When `requestType` is omitted or null, effects, events, balance changes, object
+changes, or raw effects default to `WaitForLocalExecution`; other options default
+to `WaitForEffectsCert`. An explicit `requestType` overrides that default.
+For `WaitForLocalExecution`, the adapter executes the transaction and then confirms that its digest is available
 through the same gRPC ledger service. It returns `confirmedLocalExecution: true`
 only after that lookup succeeds, or `false` when confirmation cannot be obtained
 within the bounded wait. A false confirmation does not mean transaction failure;
@@ -118,3 +133,17 @@ curl -s http://127.0.0.1:8080/sui \
   -H 'Content-Type: application/json' \
   --data '{"jsonrpc":"2.0","id":1,"method":"sui_getLatestCheckpointSequenceNumber","params":[]}'
 ```
+
+## Development
+
+Requires Go 1.24.7 or newer.
+
+```sh
+go test ./...
+go vet ./...
+```
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE). Vendored protocol sources and generated
+bindings retain their upstream notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

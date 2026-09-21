@@ -98,6 +98,7 @@ func legacyTransaction(
 	transaction *rpcv2.ExecutedTransaction,
 	options transactionOptions,
 	publishedModules map[string][]string,
+	pureValues ...resolvedPureInputs,
 ) (map[string]any, error) {
 	result := map[string]any{"digest": transaction.GetDigest()}
 	if transaction.Checkpoint != nil {
@@ -108,7 +109,7 @@ func legacyTransaction(
 	}
 	signatures := legacySignatures(transaction.GetSignatures())
 	if options.ShowInput && transaction.GetTransaction() != nil {
-		input, err := legacyTransactionInput(transaction.GetTransaction(), signatures)
+		input, err := legacyTransactionInput(transaction.GetTransaction(), signatures, pureValues...)
 		if err != nil {
 			return nil, err
 		}
@@ -141,12 +142,12 @@ func legacyTransaction(
 	return result, nil
 }
 
-func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction) (map[string]any, error) {
+func legacyDryRunTransaction(transaction *rpcv2.ExecutedTransaction, pureValues ...resolvedPureInputs) (map[string]any, error) {
 	options := transactionOptions{
 		ShowInput: true, ShowEffects: true, ShowEvents: true,
 		ShowObjectChanges: true, ShowBalanceChanges: true,
 	}
-	result, err := legacyTransaction(transaction, options, nil)
+	result, err := legacyTransaction(transaction, options, nil, pureValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,8 +203,8 @@ func appendULEB128(destination []byte, value uint64) []byte {
 	}
 }
 
-func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string) (map[string]any, error) {
-	kind, err := legacyTransactionKind(transaction.GetKind())
+func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string, pureValues ...resolvedPureInputs) (map[string]any, error) {
+	kind, err := legacyTransactionKind(transaction.GetKind(), pureValues...)
 	if err != nil {
 		return nil, err
 	}
@@ -218,14 +219,14 @@ func legacyTransactionInput(transaction *rpcv2.Transaction, signatures []string)
 	}, nil
 }
 
-func legacyTransactionKind(kind *rpcv2.TransactionKind) (map[string]any, error) {
+func legacyTransactionKind(kind *rpcv2.TransactionKind, pureValues ...resolvedPureInputs) (map[string]any, error) {
 	if kind == nil {
 		return map[string]any{}, nil
 	}
 	if programmable := kind.GetProgrammableTransaction(); programmable != nil {
 		inputs := make([]any, 0, len(programmable.GetInputs()))
 		for _, input := range programmable.GetInputs() {
-			value, err := legacyInput(input)
+			value, err := legacyInput(input, pureValues...)
 			if err != nil {
 				return nil, err
 			}
@@ -290,9 +291,14 @@ func legacyConsensusCommitPrologue(
 	return result
 }
 
-func legacyInput(input *rpcv2.Input) (any, error) {
+func legacyInput(input *rpcv2.Input, pureValues ...resolvedPureInputs) (any, error) {
 	switch input.GetKind() {
 	case rpcv2.Input_PURE:
+		if len(pureValues) > 0 {
+			if value, ok := pureValues[0][input]; ok {
+				return value, nil
+			}
+		}
 		return legacyPureInput(input)
 	case rpcv2.Input_IMMUTABLE_OR_OWNED:
 		return map[string]any{
@@ -321,9 +327,9 @@ func legacyInput(input *rpcv2.Input) (any, error) {
 }
 
 // BCS is not self-describing, and Input.literal is input-only in gRPC.
-// Until Move parameter layouts are resolved, never infer types from byte length.
+// Missing layouts must never be inferred from byte length.
 func legacyPureInput(_ *rpcv2.Input) (map[string]any, error) {
-	return nil, legacyIncompatibleError("parsed pure input requires Move type information; request showRawInput without showInput instead")
+	return nil, legacyIncompatibleError("parsed pure input type could not be resolved from transaction commands")
 }
 
 func legacyCommand(command *rpcv2.Command) any {

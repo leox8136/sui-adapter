@@ -284,7 +284,11 @@ func (b *SuiBackend) dryRunTransaction(ctx context.Context, params json.RawMessa
 	if response.GetTransaction() == nil {
 		return nil, fmt.Errorf("simulated transaction data missing")
 	}
-	return legacyDryRunTransaction(response.GetTransaction())
+	pureValues, err := b.resolvePureInputs(ctx, response.GetTransaction().GetTransaction())
+	if err != nil {
+		return nil, err
+	}
+	return legacyDryRunTransaction(response.GetTransaction(), pureValues)
 }
 
 func (b *SuiBackend) balance(ctx context.Context, params json.RawMessage) (any, error) {

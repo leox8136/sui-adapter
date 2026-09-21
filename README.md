@@ -48,10 +48,18 @@ The adapter converts supported parsed transaction input and effects, and wraps t
 gRPC transaction BCS with its intent and signatures to restore the legacy
 `rawTransaction` value. Clients that require exact binary transaction data
 should prefer `rawTransaction` and `rawEffects` over the parsed fields.
-Parsed pure inputs require Move parameter type information. BCS byte length
-cannot distinguish, for example, `u256` from `address` or `u8` from `bool`.
-Until a Move type resolver is implemented, `showInput` reads and dry-run calls
-containing pure inputs return `-32001`; raw input remains available with
+Dry-run parsed pure inputs are resolved from command semantics (`SplitCoins`,
+`TransferObjects`, and explicitly typed `MakeMoveVector`) or gRPC `GetFunction`
+parameter signatures, including generic type arguments. Supported layouts are
+addresses, booleans, unsigned integers, vectors, and the standard Move string,
+option, and object ID types. Large integers use decimal strings in JSON.
+Function signatures are cached within each request. Missing or unsupported types,
+conflicting uses of an input, and invalid BCS return `-32001`; types are never
+inferred from byte length. MoveCall resolution requires the upstream
+`MovePackageService.GetFunction` service.
+
+This resolver currently applies to dry-run calls. `showInput` reads containing
+pure inputs still return `-32001`; raw input remains available with
 `showRawInput: true` and `showInput: false`. Execution requests with
 `showInput: true` are rejected **before submission**, since the adapter cannot
 promise a correctly typed parsed response. Submit with `showInput: false`.

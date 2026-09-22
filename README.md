@@ -11,7 +11,7 @@ There is no Sui Go SDK dependency. The pinned source revision is recorded in
 `proto/SOURCE`; run `./generate-proto.sh` after intentionally updating those
 files.
 
-Currently supported JSON-RPC methods:
+## Supported JSON-RPC methods
 
 - `sui_getLatestCheckpointSequenceNumber`
 - `sui_getCheckpoint`
@@ -26,65 +26,146 @@ Currently supported JSON-RPC methods:
 - `suix_getReferenceGasPrice`
 - `sui_dryRunTransactionBlock`
 
-Unsupported methods return JSON-RPC error `-32601`. Implemented methods return
-JSON-RPC error `-32001` when a requested legacy field cannot be represented
-strictly from Sui gRPC v2 data.
+## JSON-RPC compatibility
 
 The adapter accepts legacy positional parameters and uses legacy JSON-RPC
-field names, with the compatibility exceptions documented below. Batch requests
-return JSON-RPC response arrays, and successful methods with no value return `"result": null`. Pagination cursors
-returned by `suix_getCoins` and `suix_getAllCoins` use the legacy coin object id
-shape; cursors returned by an earlier adapter build are still accepted as a
-transition path.
+field names, subject to the exceptions below. Batch requests return response
+arrays, and successful methods with no value return `"result": null`.
+Unsupported methods return `-32601`. Fields that cannot be represented strictly
+from gRPC v2 data normally return `-32001`; input-rendering failures after
+execution use `result.errors` instead, as described below.
 
-`suix_getBalance` and `suix_getAllBalances` return `coinType` and `totalBalance`.
-They omit `coinObjectCount` and `lockedBalance`, which are not supplied by the
-gRPC balance response. Clients requiring those legacy fields need adaptation.
-`suix_getAllBalances` follows every gRPC page and fails the entire request if
-any page fails; it never returns a partial list as a complete balance list.
+### Transaction parameters
 
-Sui gRPC does not expose every legacy field with the same response structure.
-The adapter converts supported parsed transaction input and effects, and wraps the
-gRPC transaction BCS with its intent and signatures to restore the legacy
-`rawTransaction` value. Clients that require exact binary transaction data
-should prefer `rawTransaction` and `rawEffects` over the parsed fields.
-Parsed pure inputs for dry-run, transaction reads, and execution responses are resolved from command semantics (`SplitCoins`,
+Transaction construction and signing do not change when using the adapter.
+`sui_executeTransactionBlock` accepts two to four positional parameters:
+
+| Position | Parameter | Adapter behavior |
+| --- | --- | --- |
+| `0` | Transaction bytes | Base64-encoded BCS TransactionData, using the existing JSON-RPC input format. |
+| `1` | Signatures | Array of Base64-encoded signatures. A single signature string is also accepted. |
+| `2` | Response options | Optional object or `null`; all flags default to `false`. |
+| `3` | Request type | Optional `WaitForEffectsCert` or `WaitForLocalExecution`; omission or `null` selects the default described below. |
+
+Example request (replace the placeholder transaction and signature):
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "sui_executeTransactionBlock",
+  "params": [
+    "<BASE64_TRANSACTION_DATA>",
+    ["<BASE64_SIGNATURE>"],
+    {
+      "showInput": true,
+      "showRawInput": true,
+      "showEffects": true
+    },
+    "WaitForLocalExecution"
+  ]
+}
+```
+
+`sui_getTransactionBlock` accepts `[digest, options]`, with options optional.
+`sui_dryRunTransactionBlock` accepts only `[transactionBytes]`, requires no
+signatures, and returns parsed `input` automatically. It does not accept
+`showInput`, `showRawInput`, or a request type.
+
+### Parsed input and raw input
+
+These flags control the response, not the submitted transaction or signature.
+Both are supported by transaction reads and execution and can be enabled together.
+
+| Option | Response field | Content |
+| --- | --- | --- |
+| `showInput` | `transaction` | Parsed transaction data: sender, gas payment, inputs, commands, and signatures. |
+| `showRawInput` | `rawTransaction` | Base64-encoded BCS transaction wrapped with intent and signatures to restore the legacy response format. |
+| `showEffects` | `effects` | Execution status, gas costs, and transaction effects. |
+
+`rawTransaction` is not the same encoding as the execution request's transaction
+bytes; do not pass it directly back as `params[0]`. Clients that need execution
+status and gas costs can request only `showEffects`, avoiding parsed input work.
+`showRawEffects`, `showEvents`, `showObjectChanges`, and `showBalanceChanges`
+also retain their legacy option names.
+
+Parsed pure inputs are resolved from command semantics (`SplitCoins`,
 `TransferObjects`, and explicitly typed `MakeMoveVector`) or gRPC `GetFunction`
 parameter signatures, including generic type arguments. Supported layouts are
 addresses, booleans, unsigned integers, vectors, and the standard Move string,
 option, and object ID types. Large integers use decimal strings in JSON.
-Function signatures are cached within each request. Missing or unsupported types,
-conflicting uses of an input, and invalid BCS return `-32001` on reads and dry-runs; types are never
-inferred from byte length. MoveCall resolution requires the upstream
-`MovePackageService.GetFunction` service.
+Types are never inferred from byte length.
 
-Both `sui_getTransactionBlock` and `sui_executeTransactionBlock` accept
-`showInput: true`, including alongside `showRawInput: true`. Parsed input is
-returned in `transaction`; raw BCS is returned in `rawTransaction` independently.
-When input resolution fails **after execution**, the response keeps the digest
-and other requested execution fields, omits `transaction`, and describes the
-input-rendering failure in `result.errors`. This is not a submission failure;
-clients should inspect effects and query the digest instead of resubmitting.
-No extra simulation or execution is performed to render input.
-Unknown input kinds are rejected rather than represented as empty objects.
+MoveCall resolution requires `MovePackageService.GetFunction`. Function signatures
+are cached within each request; these extra lookups can add latency and consume
+the request timeout. Raw input does not need type resolution.
+Missing or unsupported types, conflicting uses of an input, invalid BCS, and
+unknown input kinds produce compatibility errors on reads and dry-runs.
+Upstream lookup failures are reported as upstream errors.
 
-When `showBalanceChanges` is requested, `balanceChanges.owner` is returned only
-when it can be mapped uniquely from transaction effects; otherwise the adapter
-returns `-32001` instead of guessing an owner.
+For execution, input parsing happens **after** gRPC returns the executed
+transaction. If input resolution fails, the adapter preserves the digest and
+other successfully rendered requested fields, omits `transaction`, and puts the
+reason in `result.errors`. `rawTransaction` remains available independently when
+requested and provided by the upstream. No extra simulation or execution is
+performed to render input. This partial-response behavior applies specifically
+to input rendering; other response conversion failures can still return a
+JSON-RPC error after submission.
 
-When `requestType` is omitted or null, effects, events, balance changes, object
-changes, or raw effects default to `WaitForLocalExecution`; other options default
-to `WaitForEffectsCert`. An explicit `requestType` overrides that default.
-For `WaitForLocalExecution`, the adapter executes the transaction and then confirms that its digest is available
-through the same gRPC ledger service. It returns `confirmedLocalExecution: true`
-only after that lookup succeeds, or `false` when confirmation cannot be obtained
-within the bounded wait. A false confirmation does not mean transaction failure;
-clients must not blindly resubmit the transaction.
+### Execution confirmation and timeouts
 
-`SimulateTransaction` can evaluate a transaction against current object state
-in cases where the retired JSON-RPC dry-run rejected stale input references.
-That upstream semantic difference is preserved rather than converted into a
-synthetic JSON-RPC error.
+`requestType` controls the adapter's additional confirmation step. It is not
+forwarded as a gRPC execution mode: both values call `ExecuteTransaction`.
+
+| Request type | Adapter behavior |
+| --- | --- |
+| `WaitForEffectsCert` | Return the execution response without an additional ledger lookup. `confirmedLocalExecution` is omitted. |
+| `WaitForLocalExecution` | After execution and response conversion, query the same configured gRPC ledger service for the returned digest. Set `confirmedLocalExecution` to `true` only when that lookup succeeds, otherwise `false`. |
+
+When the request type is omitted or `null`, requesting effects, raw effects,
+events, balance changes, or object changes selects `WaitForLocalExecution`.
+All other combinations select `WaitForEffectsCert`. An explicit value overrides
+this default.
+
+The legacy local-execution mode was intended to confirm execution on the local
+node. The adapter instead confirms **query visibility through its configured
+gRPC service**. If that service is load-balanced, execution and lookup can reach
+different physical nodes. Even `confirmedLocalExecution: true` does not guarantee
+that every node or downstream balance/indexing API is immediately up to date.
+
+The additional confirmation step has a fixed maximum wait of **5 seconds**, with
+retries at **200 ms** intervals. It can stop earlier on a non-retryable lookup
+error or cancellation. This is not an extra 5 seconds beyond `REQUEST_TIMEOUT`:
+execution, type lookups, and confirmation share the request deadline (default
+**10 seconds**). Batch items also share the HTTP request deadline.
+
+### Interpreting results and retrying
+
+| Field or outcome | Meaning and client action |
+| --- | --- |
+| `effects.status.status` | Execution success or failure when effects are requested. Use this to determine the transaction outcome. |
+| `confirmedLocalExecution: false` | The adapter could not confirm query visibility. This does not mean execution failed; query the original digest with bounded retries. |
+| `result.errors` for input rendering | The execution response was received, but parsed input is unavailable. Inspect effects and query the digest if needed; do not classify this as a failed submission. |
+| Timeout, lost response, or another JSON-RPC error | Do not assume the transaction was never submitted. Reconcile its digest and effects before deciding whether to retry. |
+
+Do not construct and sign a new transfer solely because confirmation is false
+or input parsing failed: the original transfer may already have executed, and a
+new transaction can transfer funds a second time. Retry queries for the original
+digest rather than immediately creating a replacement transaction.
+
+### Other compatibility boundaries
+
+- `suix_getBalance` and `suix_getAllBalances` return `coinType` and `totalBalance`,
+  but omit `coinObjectCount` and `lockedBalance`, which gRPC does not supply.
+- `suix_getAllBalances` follows every page and fails the entire request if any
+  page fails; a partial list is never returned as a complete list.
+- Coin pagination cursors use the legacy coin object ID shape. Cursors from an
+  earlier adapter build are also accepted as a transition path.
+- `balanceChanges.owner` is returned only when transaction effects identify it
+  uniquely; otherwise the adapter returns `-32001` rather than guessing.
+- `SimulateTransaction` can evaluate against current object state where legacy
+  dry-run rejected stale object references. The adapter preserves that upstream
+  difference rather than generating a synthetic JSON-RPC error.
 
 ## Configuration
 
@@ -94,7 +175,7 @@ synthetic JSON-RPC error.
 | `SUI_GRPC_TLS` | `false` | Enable TLS for the gRPC connection |
 | `SUI_GRPC_SERVER_NAME` | empty | Optional TLS server name override |
 | `LISTEN_ADDRESS` | `:8080` | Adapter HTTP listen address |
-| `REQUEST_TIMEOUT` | `10s` | Per-request upstream timeout |
+| `REQUEST_TIMEOUT` | `10s` | Shared HTTP request deadline for upstream calls, type resolution, and confirmation; batch items share it |
 | `MAX_BODY_BYTES` | `1048576` | Maximum JSON-RPC request size |
 
 ## Run beside a Sui node

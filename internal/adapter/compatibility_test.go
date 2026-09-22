@@ -120,15 +120,6 @@ func TestExecutionDefaultWaitAndOverride(t *testing.T) {
 	}
 }
 
-func TestExecutionRejectsParsedInputBeforeSubmission(t *testing.T) {
-	execution := &fakeExecutionClient{}
-	_, err := (&SuiBackend{execution: execution}).executeTransaction(context.Background(), json.RawMessage(`["AQ==",["Ag=="],{"showInput":true}]`))
-	rpcErr, ok := err.(*RPCError)
-	if !ok || rpcErr.Code != legacyIncompatible || execution.request != nil {
-		t.Fatalf("must reject before execution: %v", err)
-	}
-}
-
 func TestParsedPureInputRejectionPreservesRawRead(t *testing.T) {
 	tx := &rpcv2.ExecutedTransaction{Transaction: &rpcv2.Transaction{
 		Bcs:  &rpcv2.Bcs{Value: []byte{1, 2}},

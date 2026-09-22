@@ -154,7 +154,18 @@ func (b *SuiBackend) transaction(ctx context.Context, params json.RawMessage) (a
 	if err != nil {
 		return nil, err
 	}
-	return legacyTransaction(response.GetTransaction(), options, publishedModules)
+	result, err := legacyTransaction(response.GetTransaction(), withoutParsedInput(options), publishedModules)
+	if err != nil {
+		return nil, err
+	}
+	if options.ShowInput {
+		input, err := b.parsedTransactionInput(ctx, response.GetTransaction())
+		if err != nil {
+			return nil, err
+		}
+		result["transaction"] = input
+	}
+	return result, nil
 }
 
 func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMessage) (any, error) {
@@ -198,11 +209,6 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 			return nil, invalidParamsError()
 		}
 	}
-	// Reject unsupported parsed output before submitting a signed transaction.
-	// Its BCS inputs cannot be typed without resolving Move parameter layouts.
-	if options.ShowInput {
-		return nil, legacyIncompatibleError("executeTransactionBlock showInput is unavailable; use showRawInput instead")
-	}
 	response, err := b.execution.ExecuteTransaction(ctx, &rpcv2.ExecuteTransactionRequest{
 		Transaction: &rpcv2.Transaction{Bcs: &rpcv2.Bcs{Value: transactionBytes}},
 		Signatures:  signatures,
@@ -218,14 +224,42 @@ func (b *SuiBackend) executeTransaction(ctx context.Context, params json.RawMess
 	if err != nil {
 		return nil, err
 	}
-	result, err := legacyTransaction(response.GetTransaction(), options, publishedModules)
+	result, err := legacyTransaction(response.GetTransaction(), withoutParsedInput(options), publishedModules)
 	if err != nil {
 		return nil, err
+	}
+	if options.ShowInput {
+		input, inputErr := b.parsedTransactionInput(ctx, response.GetTransaction())
+		if inputErr != nil {
+			// Execution has already returned a transaction. Preserve its digest
+			// and effects so a response-formatting failure cannot hide submission.
+			result["errors"] = []string{"transaction input could not be rendered: " + inputErr.Error()}
+		} else {
+			result["transaction"] = input
+		}
 	}
 	if requestType == waitForLocalExecution {
 		result["confirmedLocalExecution"] = b.confirmLocalExecution(ctx, response.GetTransaction().GetDigest())
 	}
 	return result, nil
+}
+
+// Parse input separately from other response fields so execution can report
+// rendering errors without discarding the already-submitted transaction.
+func withoutParsedInput(options transactionOptions) transactionOptions {
+	options.ShowInput = false
+	return options
+}
+
+func (b *SuiBackend) parsedTransactionInput(ctx context.Context, tx *rpcv2.ExecutedTransaction) (map[string]any, error) {
+	if tx.GetTransaction() == nil {
+		return nil, legacyIncompatibleError("parsed transaction input missing from upstream response")
+	}
+	pureValues, err := b.resolvePureInputs(ctx, tx.GetTransaction())
+	if err != nil {
+		return nil, err
+	}
+	return legacyTransactionInput(tx.GetTransaction(), legacySignatures(tx.GetSignatures()), pureValues)
 }
 
 func (b *SuiBackend) confirmLocalExecution(ctx context.Context, digest string) bool {

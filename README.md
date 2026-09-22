@@ -48,22 +48,25 @@ The adapter converts supported parsed transaction input and effects, and wraps t
 gRPC transaction BCS with its intent and signatures to restore the legacy
 `rawTransaction` value. Clients that require exact binary transaction data
 should prefer `rawTransaction` and `rawEffects` over the parsed fields.
-Dry-run parsed pure inputs are resolved from command semantics (`SplitCoins`,
+Parsed pure inputs for dry-run, transaction reads, and execution responses are resolved from command semantics (`SplitCoins`,
 `TransferObjects`, and explicitly typed `MakeMoveVector`) or gRPC `GetFunction`
 parameter signatures, including generic type arguments. Supported layouts are
 addresses, booleans, unsigned integers, vectors, and the standard Move string,
 option, and object ID types. Large integers use decimal strings in JSON.
 Function signatures are cached within each request. Missing or unsupported types,
-conflicting uses of an input, and invalid BCS return `-32001`; types are never
+conflicting uses of an input, and invalid BCS return `-32001` on reads and dry-runs; types are never
 inferred from byte length. MoveCall resolution requires the upstream
 `MovePackageService.GetFunction` service.
 
-This resolver currently applies to dry-run calls. `showInput` reads containing
-pure inputs still return `-32001`; raw input remains available with
-`showRawInput: true` and `showInput: false`. Execution requests with
-`showInput: true` are rejected **before submission**, since the adapter cannot
-promise a correctly typed parsed response. Submit with `showInput: false`.
-Unknown input kinds also return `-32001` rather than an empty object.
+Both `sui_getTransactionBlock` and `sui_executeTransactionBlock` accept
+`showInput: true`, including alongside `showRawInput: true`. Parsed input is
+returned in `transaction`; raw BCS is returned in `rawTransaction` independently.
+When input resolution fails **after execution**, the response keeps the digest
+and other requested execution fields, omits `transaction`, and describes the
+input-rendering failure in `result.errors`. This is not a submission failure;
+clients should inspect effects and query the digest instead of resubmitting.
+No extra simulation or execution is performed to render input.
+Unknown input kinds are rejected rather than represented as empty objects.
 
 When `showBalanceChanges` is requested, `balanceChanges.owner` is returned only
 when it can be mapped uniquely from transaction effects; otherwise the adapter

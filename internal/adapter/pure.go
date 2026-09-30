@@ -27,9 +27,9 @@ func (b *SuiBackend) resolvePureInputs(ctx context.Context, tx *rpcv2.Transactio
 		}
 		typ = normalizeMoveType(strings.ReplaceAll(typ, " ", ""))
 		index := arg.GetInput()
-		if old, ok := types[index]; ok && old != typ {
-			return legacyIncompatibleError(fmt.Sprintf("pure input %d has conflicting types %s and %s", index, old, typ))
-		}
+		// A pure byte string can be reused with different Move layouts. Like
+		// legacy JSON-RPC's resolve_input_type, render using the last resolved
+		// use in command/argument order; this is not transaction validation.
 		types[index] = typ
 		return nil
 	}

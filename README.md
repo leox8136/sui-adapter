@@ -99,7 +99,12 @@ Types are never inferred from byte length.
 MoveCall resolution requires `MovePackageService.GetFunction`. Function signatures
 are cached within each request; these extra lookups can add latency and consume
 the request timeout. Raw input does not need type resolution.
-Missing or unsupported types, conflicting uses of an input, invalid BCS, and
+A pure input may be reused with different Move types. For its single legacy
+`valueType`/`value` representation, the adapter uses the last resolved type in
+command and argument order, matching the legacy JSON-RPC renderer. For example,
+BCS `0x00` can represent both `false` and `Option<u64>::None`. The selected layout
+is still validated when decoding; it is not inferred from byte length.
+Missing or unsupported types, invalid BCS, and
 unknown input kinds produce compatibility errors on reads and dry-runs.
 Upstream lookup failures are reported as upstream errors.
 
@@ -161,8 +166,10 @@ digest rather than immediately creating a replacement transaction.
   page fails; a partial list is never returned as a complete list.
 - Coin pagination cursors use the legacy coin object ID shape. Cursors from an
   earlier adapter build are also accepted as a transition path.
-- `balanceChanges.owner` is returned only when transaction effects identify it
-  uniquely; otherwise the adapter returns `-32001` rather than guessing.
+- gRPC balance changes describe account-level deltas. Their `address` maps
+  directly to `balanceChanges.owner.AddressOwner`, including address balances
+  that have no changed Coin object. Coin object ownership is not used to infer
+  this field; a missing address still returns `-32001`.
 - `SimulateTransaction` can evaluate against current object state where legacy
   dry-run rejected stale object references. The adapter preserves that upstream
   difference rather than generating a synthetic JSON-RPC error.
@@ -239,3 +246,21 @@ go vet ./...
 
 Apache-2.0; see [LICENSE](LICENSE). Vendored protocol sources and generated
 bindings retain their upstream notices; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Compatibility regression fixtures
+
+`internal/adapter/testdata` contains official mainnet gRPC transaction responses
+and Move function signatures captured read-only on 2026-09-30 for:
+
+- `DYMKT6gAhBkT4W1tpsUm2dgYC1nHHYqb8NxxYokyfNE7`: an account balance delta
+  without a matching changed Coin owner, and a pure input reused as both
+  `Option<u64>` and `bool`.
+- `CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U`: accumulator settlement
+  with empty balance changes.
+
+Tests replay these fixtures through the HTTP handler for reads, dry-run, and
+execution response conversion. They make no network calls and do not broadcast
+transactions. Mapping references are the upstream
+[account balance derivation](https://github.com/MystenLabs/sui/blob/main/crates/sui-types/src/balance_change.rs)
+and legacy
+[pure input renderer](https://github.com/MystenLabs/sui/blob/main/crates/sui-json-rpc-types/src/sui_transaction.rs).

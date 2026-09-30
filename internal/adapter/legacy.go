@@ -613,7 +613,7 @@ func legacyBalanceChanges(transaction *rpcv2.ExecutedTransaction) ([]any, error)
 	changes := transaction.GetBalanceChanges()
 	result := make([]any, 0, len(changes))
 	for _, change := range changes {
-		owner, err := legacyBalanceChangeOwner(change, transaction.GetEffects())
+		owner, err := legacyBalanceChangeOwner(change)
 		if err != nil {
 			return nil, err
 		}
@@ -626,57 +626,14 @@ func legacyBalanceChanges(transaction *rpcv2.ExecutedTransaction) ([]any, error)
 	return result, nil
 }
 
-func legacyBalanceChangeOwner(change *rpcv2.BalanceChange, effects *rpcv2.TransactionEffects) (any, error) {
+// gRPC BalanceChange is an address-level delta, including accumulator
+// balances. Its address is authoritative; changed Coin objects may not exist.
+// Object custody and consensus custody must not change this account-level view.
+func legacyBalanceChangeOwner(change *rpcv2.BalanceChange) (any, error) {
 	if change.GetAddress() == "" {
-		return nil, legacyIncompatibleError(
-			"balanceChanges.owner cannot be mapped because gRPC balance change address is missing",
-		)
+		return nil, legacyIncompatibleError("balanceChanges.owner cannot be mapped because gRPC balance change address is missing")
 	}
-	if effects == nil {
-		return nil, legacyIncompatibleError(
-			"balanceChanges.owner cannot be mapped without transaction effects",
-		)
-	}
-	wantInputOwner := strings.HasPrefix(change.GetAmount(), "-")
-	var candidate *rpcv2.Owner
-	for _, object := range effects.GetChangedObjects() {
-		if coinTypeFromObjectType(object.GetObjectType()) != normalizeMoveType(change.GetCoinType()) {
-			continue
-		}
-		owner := object.GetOutputOwner()
-		if wantInputOwner {
-			owner = object.GetInputOwner()
-		}
-		if ownerMatchesBalanceAddress(owner, change.GetAddress()) {
-			if candidate == nil {
-				candidate = owner
-				continue
-			}
-			if !sameOwner(candidate, owner) {
-				return nil, legacyIncompatibleError(
-					"balanceChanges.owner cannot be mapped exactly from Sui gRPC v2 transaction effects",
-				)
-			}
-		}
-	}
-	if candidate == nil {
-		return nil, legacyIncompatibleError(
-			"balanceChanges.owner cannot be mapped exactly from Sui gRPC v2 transaction effects",
-		)
-	}
-	return legacyOwner(candidate), nil
-}
-
-func ownerMatchesBalanceAddress(owner *rpcv2.Owner, address string) bool {
-	if owner == nil {
-		return false
-	}
-	switch owner.GetKind() {
-	case rpcv2.Owner_ADDRESS, rpcv2.Owner_OBJECT, rpcv2.Owner_CONSENSUS_ADDRESS:
-		return owner.GetAddress() == address
-	default:
-		return false
-	}
+	return map[string]string{"AddressOwner": change.GetAddress()}, nil
 }
 
 func legacyObjectChanges(transaction *rpcv2.ExecutedTransaction, publishedModules map[string][]string) []any {

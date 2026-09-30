@@ -508,91 +508,35 @@ func TestLegacyEffectsClassifiesWrappedObjects(t *testing.T) {
 	}
 }
 
-func TestLegacyBalanceChangesUsesChangedObjectOwner(t *testing.T) {
-	objectOwner := &rpcv2.Owner{Kind: ptr(rpcv2.Owner_OBJECT), Address: ptr("0xobject-owner")}
-	transaction := &rpcv2.ExecutedTransaction{
-		BalanceChanges: []*rpcv2.BalanceChange{
-			{Address: ptr("0xobject-owner"), CoinType: ptr(defaultCoinType), Amount: ptr("5")},
-		},
-		Effects: &rpcv2.TransactionEffects{
-			ChangedObjects: []*rpcv2.ChangedObject{
-				{
-					ObjectId:    ptr("0xcoin"),
-					ObjectType:  ptr("0x2::coin::Coin<0x2::sui::SUI>"),
-					OutputOwner: objectOwner,
-				},
-			},
-		},
-	}
-
-	changes, err := legacyBalanceChanges(transaction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	owner := changes[0].(map[string]any)["owner"]
-	if !reflect.DeepEqual(owner, map[string]string{"ObjectOwner": "0xobject-owner"}) {
-		t.Fatalf("balance owner = %+v, want object owner", owner)
+func TestLegacyBalanceChangesUsesAccountAddress(t *testing.T) {
+	for _, amount := range []string{"5", "-5", "0"} {
+		for _, kind := range []rpcv2.Owner_OwnerKind{rpcv2.Owner_ADDRESS, rpcv2.Owner_OBJECT, rpcv2.Owner_CONSENSUS_ADDRESS} {
+			owner := &rpcv2.Owner{Kind: ptr(kind), Address: ptr("0xowner")}
+			for _, effects := range []*rpcv2.TransactionEffects{nil, {}, {ChangedObjects: []*rpcv2.ChangedObject{
+				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), InputOwner: owner, OutputOwner: owner},
+				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), OutputOwner: &rpcv2.Owner{Kind: ptr(rpcv2.Owner_OBJECT), Address: ptr("0xother")}},
+			}}} {
+				tx := &rpcv2.ExecutedTransaction{Effects: effects, BalanceChanges: []*rpcv2.BalanceChange{{Address: ptr("0xowner"), CoinType: ptr(defaultCoinType), Amount: ptr(amount)}}}
+				changes, err := legacyBalanceChanges(tx)
+				want := []any{map[string]any{"owner": map[string]string{"AddressOwner": "0xowner"}, "coinType": defaultCoinType, "amount": amount}}
+				if err != nil || !reflect.DeepEqual(changes, want) {
+					t.Fatalf("kind=%v amount=%s: got %v, err %v", kind, amount, changes, err)
+				}
+			}
+		}
 	}
 }
 
-func TestLegacyBalanceChangesRejectsUnmappedOwner(t *testing.T) {
-	transaction := &rpcv2.ExecutedTransaction{
-		BalanceChanges: []*rpcv2.BalanceChange{
-			{Address: ptr("0xowner"), CoinType: ptr(defaultCoinType), Amount: ptr("5")},
-		},
-		Effects: &rpcv2.TransactionEffects{},
+func TestLegacyBalanceChangesRejectsMissingAddress(t *testing.T) {
+	for _, change := range []*rpcv2.BalanceChange{nil, {CoinType: ptr(defaultCoinType), Amount: ptr("5")}} {
+		_, err := legacyBalanceChanges(&rpcv2.ExecutedTransaction{BalanceChanges: []*rpcv2.BalanceChange{change}})
+		if rpcErr, ok := err.(*RPCError); !ok || rpcErr.Code != legacyIncompatible {
+			t.Fatalf("expected missing address error: %v", err)
+		}
 	}
-
-	_, err := legacyBalanceChanges(transaction)
-	rpcErr, ok := err.(*RPCError)
-	if !ok || rpcErr.Code != legacyIncompatible {
-		t.Fatalf("legacyBalanceChanges() error = %+v, want legacy incompatible", err)
-	}
-}
-
-func TestLegacyBalanceChangesAllowsMultipleCoinsForSameOwner(t *testing.T) {
-	owner := &rpcv2.Owner{Kind: ptr(rpcv2.Owner_ADDRESS), Address: ptr("0xowner")}
-	transaction := &rpcv2.ExecutedTransaction{
-		BalanceChanges: []*rpcv2.BalanceChange{
-			{Address: ptr("0xowner"), CoinType: ptr(defaultCoinType), Amount: ptr("5")},
-		},
-		Effects: &rpcv2.TransactionEffects{
-			ChangedObjects: []*rpcv2.ChangedObject{
-				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), OutputOwner: owner},
-				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), OutputOwner: owner},
-			},
-		},
-	}
-
-	changes, err := legacyBalanceChanges(transaction)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ownerResult := changes[0].(map[string]any)["owner"]
-	if !reflect.DeepEqual(ownerResult, map[string]string{"AddressOwner": "0xowner"}) {
-		t.Fatalf("balance owner = %+v, want address owner", ownerResult)
-	}
-}
-
-func TestLegacyBalanceChangesRejectsAmbiguousOwner(t *testing.T) {
-	addressOwner := &rpcv2.Owner{Kind: ptr(rpcv2.Owner_ADDRESS), Address: ptr("0xowner")}
-	objectOwner := &rpcv2.Owner{Kind: ptr(rpcv2.Owner_OBJECT), Address: ptr("0xowner")}
-	transaction := &rpcv2.ExecutedTransaction{
-		BalanceChanges: []*rpcv2.BalanceChange{
-			{Address: ptr("0xowner"), CoinType: ptr(defaultCoinType), Amount: ptr("5")},
-		},
-		Effects: &rpcv2.TransactionEffects{
-			ChangedObjects: []*rpcv2.ChangedObject{
-				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), OutputOwner: addressOwner},
-				{ObjectType: ptr("0x2::coin::Coin<0x2::sui::SUI>"), OutputOwner: objectOwner},
-			},
-		},
-	}
-
-	_, err := legacyBalanceChanges(transaction)
-	rpcErr, ok := err.(*RPCError)
-	if !ok || rpcErr.Code != legacyIncompatible {
-		t.Fatalf("legacyBalanceChanges() error = %+v, want legacy incompatible", err)
+	changes, err := legacyBalanceChanges(&rpcv2.ExecutedTransaction{})
+	if err != nil || changes == nil || len(changes) != 0 {
+		t.Fatalf("empty changes: %v %v", changes, err)
 	}
 }
 

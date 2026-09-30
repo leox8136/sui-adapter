@@ -1,0 +1,350 @@
+{
+  "transaction": {
+    "digest": "CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U",
+    "transaction": {
+      "bcs": {
+        "name": "TransactionData",
+        "value": "AAoKAQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKzEcQySgAAAAAAgAI8gQAAAAAAAAACMjuAQAAAAAAAAgAAAAAAAAAAAAIIKknAAAAAAAAIAKiEt5qnfo6aeIjh6z7r7sanlkb2dY254ldz8jeBfMxABAAAAAAAAAAAAAAAAAAAAAAABDkqQUAAAAAAAAAAAAAAAAAACAAADfeM2gJjru1vGgIKDAE9HRqNOFtMuFx+UAM1YzdaQAQPP8hAAAAAAAAAAAAAAAAAAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIWYWNjdW11bGF0b3Jfc2V0dGxlbWVudBNzZXR0bGVtZW50X3Byb2xvZ3VlAAYBAAABAQABAgABAwABAwABBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIWYWNjdW11bGF0b3Jfc2V0dGxlbWVudAtzZXR0bGVfdTEyOAEHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIHYmFsYW5jZQdCYWxhbmNlAQcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgNzdWkDU1VJAAQBAAABBQABBgABBwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIWYWNjdW11bGF0b3Jfc2V0dGxlbWVudAtzZXR0bGVfdTEyOAEHAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIHYmFsYW5jZQdCYWxhbmNlAQcAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgNzdWkDU1VJAAQBAAABCAABBgABCQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAA=="
+      },
+      "digest": "CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U",
+      "version": 1,
+      "kind": {
+        "kind": "PROGRAMMABLE_SYSTEM_TRANSACTION",
+        "programmableTransaction": {
+          "inputs": [
+            {
+              "kind": "SHARED",
+              "objectId": "0x0000000000000000000000000000000000000000000000000000000000000acc",
+              "version": "684265543",
+              "mutable": false,
+              "mutability": "NON_EXCLUSIVE_WRITE"
+            },
+            {
+              "kind": "PURE",
+              "pure": "8gQAAAAAAAA="
+            },
+            {
+              "kind": "PURE",
+              "pure": "yO4BAAAAAAA="
+            },
+            {
+              "kind": "PURE",
+              "pure": "AAAAAAAAAAA="
+            },
+            {
+              "kind": "PURE",
+              "pure": "IKknAAAAAAA="
+            },
+            {
+              "kind": "PURE",
+              "pure": "AqIS3mqd+jpp4iOHrPuvuxqeWRvZ1jbniV3PyN4F8zE="
+            },
+            {
+              "kind": "PURE",
+              "pure": "AAAAAAAAAAAAAAAAAAAAAA=="
+            },
+            {
+              "kind": "PURE",
+              "pure": "5KkFAAAAAAAAAAAAAAAAAA=="
+            },
+            {
+              "kind": "PURE",
+              "pure": "AAA33jNoCY67tbxoCCgwBPR0ajThbTLhcflADNWM3Wk="
+            },
+            {
+              "kind": "PURE",
+              "pure": "PP8hAAAAAAAAAAAAAAAAAA=="
+            }
+          ],
+          "commands": [
+            {
+              "moveCall": {
+                "package": "0x0000000000000000000000000000000000000000000000000000000000000002",
+                "module": "accumulator_settlement",
+                "function": "settlement_prologue",
+                "arguments": [
+                  {
+                    "kind": "INPUT",
+                    "input": 0
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 1
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 2
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 3
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 3
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 4
+                  }
+                ]
+              }
+            },
+            {
+              "moveCall": {
+                "package": "0x0000000000000000000000000000000000000000000000000000000000000002",
+                "module": "accumulator_settlement",
+                "function": "settle_u128",
+                "typeArguments": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000002::balance::Balance\u003c0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI\u003e"
+                ],
+                "arguments": [
+                  {
+                    "kind": "INPUT",
+                    "input": 0
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 5
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 6
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 7
+                  }
+                ]
+              }
+            },
+            {
+              "moveCall": {
+                "package": "0x0000000000000000000000000000000000000000000000000000000000000002",
+                "module": "accumulator_settlement",
+                "function": "settle_u128",
+                "typeArguments": [
+                  "0x0000000000000000000000000000000000000000000000000000000000000002::balance::Balance\u003c0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI\u003e"
+                ],
+                "arguments": [
+                  {
+                    "kind": "INPUT",
+                    "input": 0
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 8
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 6
+                  },
+                  {
+                    "kind": "INPUT",
+                    "input": 9
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "sender": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "gasPayment": {
+        "objects": [
+          {
+            "objectId": "0x0000000000000000000000000000000000000000000000000000000000000000",
+            "version": "0",
+            "digest": "11111111111111111111111111111111"
+          }
+        ],
+        "owner": "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "price": "1",
+        "budget": "0"
+      },
+      "expiration": {
+        "kind": "NONE"
+      }
+    },
+    "signatures": [
+      {
+        "bcs": {
+          "name": "UserSignatureBytes",
+          "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+        },
+        "scheme": "ED25519",
+        "simple": {
+          "scheme": "ED25519",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "publicKey": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        }
+      }
+    ],
+    "effects": {
+      "bcs": {
+        "name": "TransactionEffects",
+        "value": "AQDyBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIKlS+hmWon6ELO5Cja6cWCVLEWdwEHLz8uknOicqElFZAAACID+clz+VmgAmXKHZfQ4WjxtZwnnywUp3zR/2gnmQ+W5uIN6pMCpA2HcUgUise5+tcS24wEE3LcppiquPwdsboisCmfsmMwAAAAACHftFfnsrrAjAmWPvmAjdsvtHeHQjzU6H7/FjTfyJJ84B6vomMwAAAAAg1zXhcdncL/Mg9eeg22LBR7vP2uckJY7Fr6ecKMJAbEABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACswBILM9jtgxz1L31IOaagXtIK1SBxe8XsqDgkzR30Vkpj1pAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAArMAG79XDbM+HkmU7dQ7U00uOid0TJGCOgDVIHi9mdILDw/AZb7JjMAAAAAIMZ6Y+H3Fl2vREfw+CjTe5bopdIuTGrdsCzR+kzIX9fTAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAArMASAHPZ3wIbx2oiWP5adjlbQzk+sA3NpxzEb86dHhkPiVTwEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKzAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACswAmPsmMwAAAAAgT8Rodn5+9ERH3ePncZQOkmP4aYJbw5W1peLU+mzT3icA"
+      },
+      "digest": "AtGPmCcU4jsb9oyPUx7VEB79Hjt5o68eT1fD96gzYhuu",
+      "version": 2,
+      "status": {
+        "success": true
+      },
+      "epoch": "1266",
+      "gasUsed": {
+        "computationCost": "0",
+        "storageCost": "0",
+        "storageRebate": "0",
+        "nonRefundableStorageFee": "0"
+      },
+      "transactionDigest": "CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U",
+      "dependencies": [
+        "5HKB8ax7JK3GANFRmbypFYShNuFGyRBsSb8zT6iWTr8u",
+        "FzB9793r5XvxA6ZgReqQNU6fKikn7NA3uYsDB2qBsSph"
+      ],
+      "lamportVersion": "858192793",
+      "changedObjects": [
+        {
+          "objectId": "0x1dfb457e7b2bac08c09963ef9808ddb2fb47787423cd4e87eff1634dfc8927ce",
+          "inputState": "INPUT_OBJECT_STATE_EXISTS",
+          "inputVersion": "858192618",
+          "inputDigest": "FV6JpsLZUNPhgZ7KBQZ58AzUFScjSPwRzjyoB6cGeEoh",
+          "inputOwner": {
+            "kind": "OBJECT",
+            "address": "0x0000000000000000000000000000000000000000000000000000000000000acc"
+          },
+          "outputState": "OUTPUT_OBJECT_STATE_OBJECT_WRITE",
+          "outputVersion": "858192793",
+          "outputDigest": "D4gRNCUMxb5URH4Cb1rET3qEKjb6DZzGCkCbSEPo7t9W",
+          "outputOwner": {
+            "kind": "OBJECT",
+            "address": "0x0000000000000000000000000000000000000000000000000000000000000acc"
+          },
+          "idOperation": "NONE",
+          "objectType": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field\u003c0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::Key\u003c0x0000000000000000000000000000000000000000000000000000000000000002::balance::Balance\u003c0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI\u003e\u003e,0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::U128\u003e"
+        },
+        {
+          "objectId": "0x6efd5c36ccf8792653b750ed4d34b8e89dd1324608e8035481e2f667482c3c3f",
+          "inputState": "INPUT_OBJECT_STATE_EXISTS",
+          "inputVersion": "858192790",
+          "inputDigest": "EMmy4nBXFkGMMPayFfWF9fn1QuHHAeb5YEUePxSYCACA",
+          "inputOwner": {
+            "kind": "OBJECT",
+            "address": "0x0000000000000000000000000000000000000000000000000000000000000acc"
+          },
+          "outputState": "OUTPUT_OBJECT_STATE_OBJECT_WRITE",
+          "outputVersion": "858192793",
+          "outputDigest": "VGMCRX9w6c67dauWAcYuUJGC6NQiC9Z3VMhmaTSpdkS",
+          "outputOwner": {
+            "kind": "OBJECT",
+            "address": "0x0000000000000000000000000000000000000000000000000000000000000acc"
+          },
+          "idOperation": "NONE",
+          "objectType": "0x0000000000000000000000000000000000000000000000000000000000000002::dynamic_field::Field\u003c0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::Key\u003c0x0000000000000000000000000000000000000000000000000000000000000002::balance::Balance\u003c0x0000000000000000000000000000000000000000000000000000000000000002::sui::SUI\u003e\u003e,0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::U128\u003e"
+        }
+      ],
+      "unchangedConsensusObjects": [
+        {
+          "kind": "READ_ONLY_ROOT",
+          "objectId": "0x0000000000000000000000000000000000000000000000000000000000000acc",
+          "version": "858192792",
+          "digest": "6NNuvLEhzjuhXfatPCSEqQRxFBTMt7rdbMe7KceNWKgJ",
+          "objectType": "0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::AccumulatorRoot"
+        }
+      ]
+    },
+    "checkpoint": "328498189",
+    "timestamp": "2026-09-30T02:17:11.375Z"
+  },
+  "functions": {
+    "0x0000000000000000000000000000000000000000000000000000000000000002::accumulator_settlement::settle_u128": {
+      "function": {
+        "name": "settle_u128",
+        "visibility": "PRIVATE",
+        "isEntry": false,
+        "typeParameters": [
+          {}
+        ],
+        "parameters": [
+          {
+            "reference": "MUTABLE",
+            "body": {
+              "type": "DATATYPE",
+              "typeName": "0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::AccumulatorRoot"
+            }
+          },
+          {
+            "body": {
+              "type": "ADDRESS"
+            }
+          },
+          {
+            "body": {
+              "type": "U128"
+            }
+          },
+          {
+            "body": {
+              "type": "U128"
+            }
+          },
+          {
+            "reference": "IMMUTABLE",
+            "body": {
+              "type": "DATATYPE",
+              "typeName": "0x0000000000000000000000000000000000000000000000000000000000000002::tx_context::TxContext"
+            }
+          }
+        ]
+      }
+    },
+    "0x0000000000000000000000000000000000000000000000000000000000000002::accumulator_settlement::settlement_prologue": {
+      "function": {
+        "name": "settlement_prologue",
+        "visibility": "PRIVATE",
+        "isEntry": false,
+        "parameters": [
+          {
+            "reference": "MUTABLE",
+            "body": {
+              "type": "DATATYPE",
+              "typeName": "0x0000000000000000000000000000000000000000000000000000000000000002::accumulator::AccumulatorRoot"
+            }
+          },
+          {
+            "body": {
+              "type": "U64"
+            }
+          },
+          {
+            "body": {
+              "type": "U64"
+            }
+          },
+          {
+            "body": {
+              "type": "U64"
+            }
+          },
+          {
+            "body": {
+              "type": "U64"
+            }
+          },
+          {
+            "body": {
+              "type": "U64"
+            }
+          },
+          {
+            "reference": "IMMUTABLE",
+            "body": {
+              "type": "DATATYPE",
+              "typeName": "0x0000000000000000000000000000000000000000000000000000000000000002::tx_context::TxContext"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

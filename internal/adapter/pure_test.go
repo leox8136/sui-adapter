@@ -114,17 +114,45 @@ func TestResolveMoveCallPureInputs(t *testing.T) {
 	}
 }
 
-func TestPureInputUnresolvedAndConflicting(t *testing.T) {
+func TestPureInputUnresolved(t *testing.T) {
 	input := pureInput(make([]byte, 32))
-	split := &rpcv2.Command{Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Amounts: []*rpcv2.Argument{pureArg(0)}}}}
-	transfer := &rpcv2.Command{Command: &rpcv2.Command_TransferObjects{TransferObjects: &rpcv2.TransferObjects{Address: pureArg(0)}}}
-	for _, commands := range [][]*rpcv2.Command{nil, {split, transfer}} {
-		_, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}, commands...))
-		if rpcErr, ok := err.(*RPCError); !ok || rpcErr.Code != legacyIncompatible || strings.Contains(rpcErr.Message, "showRawInput") {
-			t.Fatalf("unexpected error: %v", err)
-		}
+	_, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}))
+	if rpcErr, ok := err.(*RPCError); !ok || rpcErr.Code != legacyIncompatible || strings.Contains(rpcErr.Message, "showRawInput") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestPureInputReusedWithDifferentLayouts(t *testing.T) {
+	option := &rpcv2.OpenSignatureBody{Type: ptr(rpcv2.OpenSignatureBody_DATATYPE), TypeName: ptr("0x1::option::Option"), TypeParameterInstantiation: []*rpcv2.OpenSignatureBody{{Type: ptr(rpcv2.OpenSignatureBody_U64)}}}
+	boolean := &rpcv2.OpenSignatureBody{Type: ptr(rpcv2.OpenSignatureBody_BOOL)}
+	for _, tc := range []struct {
+		first, last *rpcv2.OpenSignatureBody
+		typ         string
+		want        any
+	}{
+		{option, boolean, "bool", false}, {boolean, option, "0x1::option::Option<u64>", []any{}},
+	} {
+		client := &functionClient{function: &rpcv2.FunctionDescriptor{Parameters: []*rpcv2.OpenSignature{{Body: tc.first}, {Body: tc.last}}}}
+		call := &rpcv2.Command{Command: &rpcv2.Command_MoveCall{MoveCall: &rpcv2.MoveCall{Package: ptr("0x42"), Module: ptr("m"), Function: ptr("f"), Arguments: []*rpcv2.Argument{pureArg(0), pureArg(0)}}}}
+		input := pureInput([]byte{0}) // Both None<u64> and false have this BCS encoding.
+		values, err := (&SuiBackend{packages: client}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}, call))
+		if err != nil || !reflect.DeepEqual(values[input], map[string]any{"type": "pure", "valueType": tc.typ, "value": tc.want}) {
+			t.Fatalf("got %v err %v", values, err)
+		}
+	}
+	// The selected final layout still has to decode valid BCS.
+	input := pureInput(make([]byte, 32))
+	transfer := &rpcv2.Command{Command: &rpcv2.Command_TransferObjects{TransferObjects: &rpcv2.TransferObjects{Address: pureArg(0)}}}
+	split := &rpcv2.Command{Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Amounts: []*rpcv2.Argument{pureArg(0)}}}}
+	if _, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}, transfer, split)); err == nil {
+		t.Fatal("invalid final u64 layout accepted")
+	}
+	values, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}, split, transfer))
+	if err != nil || values[input]["valueType"] != "address" {
+		t.Fatalf("last command layout not selected: %v %v", values, err)
+	}
+}
+
 func TestDecodePureValue(t *testing.T) {
 	for _, tc := range []struct {
 		typ  string

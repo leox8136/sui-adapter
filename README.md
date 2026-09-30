@@ -89,6 +89,13 @@ status and gas costs can request only `showEffects`, avoiding parsed input work.
 `showRawEffects`, `showEvents`, `showObjectChanges`, and `showBalanceChanges`
 also retain their legacy option names.
 
+Funds withdrawal inputs render as `type: "fundsWithdrawal"`, with
+`reservation.maxAmountU64` as a decimal string, `typeArg.balance` as the coin
+Move type, and `withdrawFrom` as `"sender"` or `"sponsor"`. The reservation is a
+maximum withdrawal amount, not the actual balance change; `balanceChanges`
+continues to use upstream deltas. Missing amounts/types and missing or unknown
+sources fail input conversion instead of defaulting to zero or sender.
+
 Parsed pure inputs are resolved from command semantics (`SplitCoins`,
 `TransferObjects`, and explicitly typed `MakeMoveVector`) or gRPC `GetFunction`
 parameter signatures, including generic type arguments. Supported layouts are
@@ -266,6 +273,9 @@ and Move function signatures captured read-only on 2026-09-30 for:
   with empty balance changes.
 - `84CiBJfK18QQZPF1akkXTwnZFS32jZdLtzuBVim5fgxn`: unused pure input 14,
   preserved as 40 untyped bytes while retaining both balance changes.
+
+- `B2j9QhAxs5qrvuW8HSG7VqeJQFiFN7qPcKJ6QWk1rvxP`: sender funds
+  withdrawal input 10, preserving its reservation and both actual balance deltas.
 
 Tests replay these fixtures through the HTTP handler for reads, dry-run, and
 execution response conversion. They make no network calls and do not broadcast

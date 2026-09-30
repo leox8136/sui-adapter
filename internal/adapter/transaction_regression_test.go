@@ -37,7 +37,7 @@ func (f *recordedFunctions) GetFunction(_ context.Context, r *rpcv2.GetFunctionR
 // Fixtures are read-only responses captured from the official mainnet gRPC
 // endpoint on 2026-09-30. No network access or real execution occurs in this test.
 func TestMainnetTransactionCompatibilityRegression(t *testing.T) {
-	for _, digest := range []string{"DYMKT6gAhBkT4W1tpsUm2dgYC1nHHYqb8NxxYokyfNE7", "CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U", "84CiBJfK18QQZPF1akkXTwnZFS32jZdLtzuBVim5fgxn"} {
+	for _, digest := range []string{"DYMKT6gAhBkT4W1tpsUm2dgYC1nHHYqb8NxxYokyfNE7", "CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U", "84CiBJfK18QQZPF1akkXTwnZFS32jZdLtzuBVim5fgxn", "B2j9QhAxs5qrvuW8HSG7VqeJQFiFN7qPcKJ6QWk1rvxP"} {
 		for _, method := range []string{"sui_getTransactionBlock", "sui_dryRunTransactionBlock", "sui_executeTransactionBlock"} {
 			t.Run(digest+"/"+method, func(t *testing.T) {
 				data, err := os.ReadFile("testdata/" + digest + ".json")
@@ -132,6 +132,19 @@ func TestMainnetTransactionCompatibilityRegression(t *testing.T) {
 					wantBalances := []any{
 						map[string]any{"owner": map[string]any{"AddressOwner": "0x2c3f65a489cfc8afe08acbf2f276b3a5301db295b1a3290e23f0bd683a775c33"}, "coinType": "0x2::sui::SUI", "amount": "20170039"},
 						map[string]any{"owner": map[string]any{"AddressOwner": "0xd09783e7fe926e738c17522fed72866ef53b85d764bf10c0448854ba041a23ee"}, "coinType": "0x2::sui::SUI", "amount": "-252208"},
+					}
+					if !reflect.DeepEqual(balances, wantBalances) {
+						t.Fatalf("balance changes changed: %v", balances)
+					}
+				} else if strings.HasPrefix(digest, "B2j9") {
+					want := map[string]any{"type": "fundsWithdrawal", "reservation": map[string]any{"maxAmountU64": "13673827442"}, "typeArg": map[string]any{"balance": "0x2::sui::SUI"}, "withdrawFrom": "sender"}
+					if !reflect.DeepEqual(inputs[10], want) {
+						t.Fatalf("funds withdrawal: %v", inputs[10])
+					}
+					owner := map[string]any{"AddressOwner": "0xe54df268b85d20542f22120fbe2b86fb2a2c5d03b6feffbf309ea81b7cfa0a88"}
+					wantBalances := []any{
+						map[string]any{"owner": owner, "coinType": "0x2::sui::SUI", "amount": "-12447715100"},
+						map[string]any{"owner": owner, "coinType": "0x7016aae72cfc67f2fadf55769c0a7dd54291a583b63051a5ed71081cce836ac6::sca::SCA", "amount": "-642891769555"},
 					}
 					if !reflect.DeepEqual(balances, wantBalances) {
 						t.Fatalf("balance changes changed: %v", balances)

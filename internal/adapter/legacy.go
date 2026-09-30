@@ -321,9 +321,33 @@ func legacyInput(input *rpcv2.Input, pureValues ...resolvedPureInputs) (any, err
 			"version":  strconv.FormatUint(input.GetVersion(), 10),
 			"digest":   input.GetDigest(),
 		}, nil
+	case rpcv2.Input_FUNDS_WITHDRAWAL:
+		return legacyFundsWithdrawal(input.GetFundsWithdrawal())
 	default:
 		return nil, legacyIncompatibleError("transaction input kind cannot be represented in legacy JSON-RPC")
 	}
+}
+
+func legacyFundsWithdrawal(value *rpcv2.FundsWithdrawal) (any, error) {
+	if value == nil || value.Amount == nil || strings.TrimSpace(value.GetCoinType()) == "" {
+		return nil, legacyIncompatibleError("funds withdrawal input is missing amount or coin type")
+	}
+	var source string
+	switch value.GetSource() {
+	case rpcv2.FundsWithdrawal_SENDER:
+		source = "sender"
+	case rpcv2.FundsWithdrawal_SPONSOR:
+		source = "sponsor"
+	default:
+		return nil, legacyIncompatibleError("funds withdrawal source cannot be represented in legacy JSON-RPC")
+	}
+	// This is the reserved maximum, not the transaction's actual balance delta.
+	return map[string]any{
+		"type":         "fundsWithdrawal",
+		"reservation":  map[string]any{"maxAmountU64": strconv.FormatUint(value.GetAmount(), 10)},
+		"typeArg":      map[string]any{"balance": canonicalMoveType(value.GetCoinType())},
+		"withdrawFrom": source,
+	}, nil
 }
 
 // BCS is not self-describing, and Input.literal is input-only in gRPC.

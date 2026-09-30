@@ -17,6 +17,10 @@ type resolvedPureInputs map[*rpcv2.Input]map[string]any
 
 func (b *SuiBackend) resolvePureInputs(ctx context.Context, tx *rpcv2.Transaction) (resolvedPureInputs, error) {
 	pt := tx.GetKind().GetProgrammableTransaction()
+	referenced, err := referencedTransactionInputs(pt)
+	if err != nil {
+		return nil, err
+	}
 	types := make(map[uint32]string)
 	isPure := func(arg *rpcv2.Argument) bool {
 		return arg.GetKind() == rpcv2.Argument_INPUT && arg.Input != nil && int(arg.GetInput()) < len(pt.GetInputs()) && pt.GetInputs()[arg.GetInput()].GetKind() == rpcv2.Input_PURE
@@ -107,7 +111,13 @@ func (b *SuiBackend) resolvePureInputs(ctx context.Context, tx *rpcv2.Transactio
 		}
 		typ, ok := types[uint32(i)]
 		if !ok {
-			return nil, legacyIncompatibleError(fmt.Sprintf("pure input %d type could not be resolved from transaction commands", i))
+			if referenced[uint32(i)] {
+				return nil, legacyIncompatibleError(fmt.Sprintf("referenced pure input %d type could not be resolved", i))
+			}
+			// Unused pure inputs have no command-derived layout. Preserve their
+			// bytes using the legacy untyped representation, without guessing.
+			result[input] = map[string]any{"type": "pure", "valueType": nil, "value": bytesToNumbers(input.GetPure())}
+			continue
 		}
 		value, err := decodePureValue(typ, input.GetPure())
 		if err != nil {
@@ -306,4 +316,44 @@ func validatePureType(typ string, depth int) error {
 		}
 	}
 	return fmt.Errorf("unsupported pure type %s", typ)
+}
+
+// Enumerate every supported command's arguments before allowing untyped bytes.
+// Unknown commands cannot prove an input is unused and must fail closed.
+func referencedTransactionInputs(pt *rpcv2.ProgrammableTransaction) (map[uint32]bool, error) {
+	referenced := make(map[uint32]bool)
+	for _, command := range pt.GetCommands() {
+		var args []*rpcv2.Argument
+		switch c := command.GetCommand().(type) {
+		case *rpcv2.Command_MoveCall:
+			args = c.MoveCall.GetArguments()
+		case *rpcv2.Command_TransferObjects:
+			args = append(args, c.TransferObjects.GetObjects()...)
+			args = append(args, c.TransferObjects.GetAddress())
+		case *rpcv2.Command_SplitCoins:
+			args = append(args, c.SplitCoins.GetCoin())
+			args = append(args, c.SplitCoins.GetAmounts()...)
+		case *rpcv2.Command_MergeCoins:
+			args = append(args, c.MergeCoins.GetCoin())
+			args = append(args, c.MergeCoins.GetCoinsToMerge()...)
+		case *rpcv2.Command_MakeMoveVector:
+			args = c.MakeMoveVector.GetElements()
+		case *rpcv2.Command_Upgrade:
+			args = append(args, c.Upgrade.GetTicket())
+		case *rpcv2.Command_Publish:
+			// Publish contains bytecode and dependency IDs, not input references.
+		default:
+			return nil, legacyIncompatibleError("unknown transaction command; cannot resolve input usage")
+		}
+		for _, arg := range args {
+			if arg.GetKind() != rpcv2.Argument_INPUT {
+				continue
+			}
+			if arg.Input == nil || uint64(arg.GetInput()) >= uint64(len(pt.GetInputs())) {
+				return nil, legacyIncompatibleError("transaction command input reference is missing or out of bounds")
+			}
+			referenced[arg.GetInput()] = true
+		}
+	}
+	return referenced, nil
 }

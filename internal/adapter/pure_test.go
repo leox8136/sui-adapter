@@ -114,11 +114,39 @@ func TestResolveMoveCallPureInputs(t *testing.T) {
 	}
 }
 
-func TestPureInputUnresolved(t *testing.T) {
-	input := pureInput(make([]byte, 32))
-	_, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input}))
-	if rpcErr, ok := err.(*RPCError); !ok || rpcErr.Code != legacyIncompatible || strings.Contains(rpcErr.Message, "showRawInput") {
-		t.Fatalf("unexpected error: %v", err)
+func TestPureInputUnresolvedPreservesBytes(t *testing.T) {
+	for _, data := range [][]byte{nil, {}, {0}, {0, 128, 255}, make([]byte, 32)} {
+		input := pureInput(data)
+		// Include a known input to ensure fallback remains local to the unused one.
+		typed := pureInput([]byte{42, 0, 0, 0, 0, 0, 0, 0})
+		split := &rpcv2.Command{Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Amounts: []*rpcv2.Argument{pureArg(1)}}}}
+		values, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{input, typed}, split))
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(values[input])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded struct {
+			Type      string `json:"type"`
+			ValueType any    `json:"valueType"`
+			Value     []int  `json:"value"`
+		}
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Type != "pure" || decoded.ValueType != nil || decoded.Value == nil || len(decoded.Value) != len(data) {
+			t.Fatalf("bad untyped input: %s", encoded)
+		}
+		for i, v := range decoded.Value {
+			if v != int(data[i]) {
+				t.Fatal("raw byte changed")
+			}
+		}
+		if values[typed]["valueType"] != "u64" || values[typed]["value"] != "42" {
+			t.Fatalf("known input lost type: %v", values[typed])
+		}
 	}
 }
 
@@ -207,5 +235,26 @@ func TestResolveMakeMoveVectorAndMissingFunction(t *testing.T) {
 		if e, ok := err.(*RPCError); !ok || e.Code != legacyIncompatible {
 			t.Fatalf("missing signature must fail: %v", err)
 		}
+	}
+}
+
+func TestUntypedFallbackRejectsReferencedAndUnknownCommands(t *testing.T) {
+	for name, command := range map[string]*rpcv2.Command{
+		"merge coin":      {Command: &rpcv2.Command_MergeCoins{MergeCoins: &rpcv2.MergeCoins{Coin: pureArg(0)}}},
+		"merge source":    {Command: &rpcv2.Command_MergeCoins{MergeCoins: &rpcv2.MergeCoins{CoinsToMerge: []*rpcv2.Argument{pureArg(0)}}}},
+		"split coin":      {Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Coin: pureArg(0)}}},
+		"transfer object": {Command: &rpcv2.Command_TransferObjects{TransferObjects: &rpcv2.TransferObjects{Objects: []*rpcv2.Argument{pureArg(0)}}}},
+		"upgrade ticket":  {Command: &rpcv2.Command_Upgrade{Upgrade: &rpcv2.Upgrade{Ticket: pureArg(0)}}},
+		"unknown command": {},
+		"nil command":     nil,
+		"out of bounds":   {Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Amounts: []*rpcv2.Argument{pureArg(1)}}}},
+		"missing index":   {Command: &rpcv2.Command_SplitCoins{SplitCoins: &rpcv2.SplitCoins{Amounts: []*rpcv2.Argument{{Kind: ptr(rpcv2.Argument_INPUT)}}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			values, err := (&SuiBackend{}).resolvePureInputs(context.Background(), pureTx([]*rpcv2.Input{pureInput([]byte{0})}, command))
+			if rpcErr, ok := err.(*RPCError); !ok || rpcErr.Code != legacyIncompatible || values != nil {
+				t.Fatalf("expected explicit failure, got %v %v", values, err)
+			}
+		})
 	}
 }

@@ -93,15 +93,15 @@ func TestShowInputReadAndExecution(t *testing.T) {
 }
 
 func TestShowInputResolutionFailures(t *testing.T) {
-	for _, failure := range []string{"signature unavailable", "unknown type", "missing transaction", "invalid BCS"} {
+	for _, failure := range []string{"signature unavailable", "unknown input kind", "missing transaction", "invalid BCS"} {
 		for _, execute := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/execute=%t", failure, execute), func(t *testing.T) {
 				tx, packages := parsedInputFixture()
 				switch failure {
 				case "signature unavailable":
 					packages.err = status.Error(codes.Unavailable, "signature unavailable")
-				case "unknown type":
-					tx.Transaction.Kind.GetProgrammableTransaction().Commands = nil
+				case "unknown input kind":
+					tx.Transaction.Kind.GetProgrammableTransaction().Inputs[0].Kind = ptr(rpcv2.Input_INPUT_KIND_UNKNOWN)
 				case "missing transaction":
 					tx.Transaction = nil
 				case "invalid BCS":

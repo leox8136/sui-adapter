@@ -104,8 +104,15 @@ A pure input may be reused with different Move types. For its single legacy
 command and argument order, matching the legacy JSON-RPC renderer. For example,
 BCS `0x00` can represent both `false` and `Option<u64>::None`. The selected layout
 is still validated when decoding; it is not inferred from byte length.
-Missing or unsupported types, invalid BCS, and
-unknown input kinds produce compatibility errors on reads and dry-runs.
+Only pure inputs confirmed to be unreferenced by all supported commands retain
+all their BCS bytes as a JSON integer array with `"type": "pure"` and
+`"valueType": null`. An empty byte sequence renders as `"value": []`, not null or
+Base64. Known types continue to return their typed values. Referenced inputs
+without a resolved type, unknown commands, and invalid input references fail
+explicitly instead of falling back to untyped bytes.
+Incomplete or unsupported referenced type signatures, invalid BCS for a known
+type, and unknown input kinds still produce compatibility errors on reads and
+dry-runs.
 Upstream lookup failures are reported as upstream errors.
 
 For execution, input parsing happens **after** gRPC returns the executed
@@ -257,6 +264,8 @@ and Move function signatures captured read-only on 2026-09-30 for:
   `Option<u64>` and `bool`.
 - `CPyHbe9cUvK4x8bSqZHJ4LnqDXaf6371yWVnqXt9122U`: accumulator settlement
   with empty balance changes.
+- `84CiBJfK18QQZPF1akkXTwnZFS32jZdLtzuBVim5fgxn`: unused pure input 14,
+  preserved as 40 untyped bytes while retaining both balance changes.
 
 Tests replay these fixtures through the HTTP handler for reads, dry-run, and
 execution response conversion. They make no network calls and do not broadcast

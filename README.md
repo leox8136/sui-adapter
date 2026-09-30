@@ -119,7 +119,14 @@ without a resolved type, unknown commands, and invalid input references fail
 explicitly instead of falling back to untyped bytes.
 Incomplete or unsupported referenced type signatures, invalid BCS for a known
 type, and unknown input kinds still produce compatibility errors on reads and
-dry-runs.
+dry-runs. A read of an explicitly failed on-chain transaction is the exception:
+if a resolved pure value cannot be decoded, the response omits `transaction`
+and explains the rendering failure in `result.errors`, retaining other requested
+fields. It never substitutes an invented value or untyped bytes for the invalid
+input. Successful transactions, missing/ambiguous execution status, signature
+lookup failures, and unknown input kinds still fail the read. This partial read
+behavior is an adapter compatibility policy; clients must check `result.errors`
+and `effects.status`. `showRawInput` remains independently available.
 Upstream lookup failures are reported as upstream errors.
 
 For execution, input parsing happens **after** gRPC returns the executed
@@ -277,7 +284,11 @@ and Move function signatures captured read-only on 2026-09-30 for:
 - `B2j9QhAxs5qrvuW8HSG7VqeJQFiFN7qPcKJ6QWk1rvxP`: sender funds
   withdrawal input 10, preserving its reservation and both actual balance deltas.
 
-Tests replay these fixtures through the HTTP handler for reads, dry-run, and
+- `5MykKR8prfJvjX9RFa8uVtBVi6Qot52y9koR3XBp4veL`: failed transaction with
+  invalid `vector<u64>` bytes. Read tests retain the failure and exact balance
+  delta, omit parsed input with an explicit error, and reject ambiguous status.
+
+Tests replay the successful fixtures through the HTTP handler for reads, dry-run, and
 execution response conversion. They make no network calls and do not broadcast
 transactions. Mapping references are the upstream
 [account balance derivation](https://github.com/MystenLabs/sui/blob/main/crates/sui-types/src/balance_change.rs)

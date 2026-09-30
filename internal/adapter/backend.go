@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -161,6 +162,12 @@ func (b *SuiBackend) transaction(ctx context.Context, params json.RawMessage) (a
 	if options.ShowInput {
 		input, err := b.parsedTransactionInput(ctx, response.GetTransaction())
 		if err != nil {
+			executionStatus := response.GetTransaction().GetEffects().GetStatus()
+			var decodeErr *pureInputDecodeError
+			if executionStatus != nil && executionStatus.Success != nil && !executionStatus.GetSuccess() && executionStatus.GetError() != nil && errors.As(err, &decodeErr) {
+				result["errors"] = []string{"transaction input could not be rendered: " + err.Error()}
+				return result, nil
+			}
 			return nil, err
 		}
 		result["transaction"] = input

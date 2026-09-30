@@ -13,6 +13,11 @@ import (
 
 // Values are request-local and keyed by the original protobuf input. Never put
 // inferred types into Input.literal, which is an input-only gRPC field.
+// Distinguishes value decoding from signature lookup and unsupported input errors.
+type pureInputDecodeError struct{ error }
+
+func (e *pureInputDecodeError) Unwrap() error { return e.error }
+
 type resolvedPureInputs map[*rpcv2.Input]map[string]any
 
 func (b *SuiBackend) resolvePureInputs(ctx context.Context, tx *rpcv2.Transaction) (resolvedPureInputs, error) {
@@ -121,7 +126,7 @@ func (b *SuiBackend) resolvePureInputs(ctx context.Context, tx *rpcv2.Transactio
 		}
 		value, err := decodePureValue(typ, input.GetPure())
 		if err != nil {
-			return nil, legacyIncompatibleError(fmt.Sprintf("pure input %d (%s): %v", i, typ, err))
+			return nil, &pureInputDecodeError{legacyIncompatibleError(fmt.Sprintf("pure input %d (%s): %v", i, typ, err))}
 		}
 		result[input] = map[string]any{"type": "pure", "valueType": typ, "value": value}
 	}
